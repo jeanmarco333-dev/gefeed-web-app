@@ -145,8 +145,27 @@ def save_pesos(df: pd.DataFrame):
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
-    try: return pd.read_csv(CATALOG_PATH, encoding="utf-8-sig")
-    except: return pd.DataFrame({"id":[], "nombre":[], "etapa":[]})
+    try:
+        df = pd.read_csv(CATALOG_PATH, encoding="utf-8-sig")
+    except:
+        return pd.DataFrame({"id":[], "nombre":[], "etapa":[]})
+
+    # Normalizar encabezados (maneja archivos con mayúsculas/espacios)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Asegurar columnas esperadas
+    if "id" not in df.columns:
+        df["id"] = pd.Series(dtype="int64")
+    if "nombre" not in df.columns:
+        df["nombre"] = pd.Series(dtype="object")
+    if "etapa" not in df.columns:
+        df["etapa"] = pd.Series(dtype="object")
+
+    df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
+    df["nombre"] = df["nombre"].fillna("").astype(str)
+    df["etapa"] = df["etapa"].fillna("").astype(str)
+
+    return df
 
 def save_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False, encoding="utf-8")
