@@ -40,12 +40,13 @@ if not os.path.exists(RAC_PATH):
         json.dump([], f, ensure_ascii=False, indent=2)
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # ---- normalizar nombres de columna (soporta variantes/tildes/espacios) ----
     rename_map = {}
     for c in list(df.columns):
-        c2 = str(c).strip().replace("\ufeff","")  
-        c2u = c2.upper()
+        c2 = str(c).strip().replace("\ufeff","")  # BOM
+        c2u = c2.upper().replace("Á","A").replace("É","E").replace("Í","I").replace("Ó","O").replace("Ú","U")
         if c2u == "ORIGEN": rename_map[c] = "ORIGEN"
-        elif c2u == "PRESENTACION": rename_map[c] = "PRESENTACION"
+        elif c2u.strip() == "PRESENTACION": rename_map[c] = "PRESENTACION"
         elif c2u == "TIPO": rename_map[c] = "TIPO"
         elif c2u in ("MS","%MS","M.S."): rename_map[c] = "MS"
         elif c2u in ("TND","TND (%)","TND%","TND(%)"): rename_map[c] = "TND (%)"
@@ -56,21 +57,52 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         elif c2u == "EM": rename_map[c] = "EM"
         elif c2u in ("ENP2","ENP"): rename_map[c] = "ENP2"
     df = df.rename(columns=rename_map)
+
+    # ---- asegurar columnas y orden ----
+    ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
     for col in ALIM_COLS:
         if col not in df.columns:
             df[col] = None
     df = df[ALIM_COLS]
+
+    # ---- helper numérico: quita $ y %, espacios; coma→punto ----
     def _to_num(x, default=0.0):
-        if pd.isna(x): return default
-        if isinstance(x, str): x = x.replace(",", ".")
+        if pd.isna(x):
+            return default
+        s = str(x).strip()
+        if not s:
+            return default
+        # quitar símbolos y espacios duros
+        s = s.replace("\u00A0", " ").replace(" ", "")
+        s = s.replace("$", "").replace("%", "")
+        # coma decimal AR → punto
+        s = s.replace(",", ".")
         try:
-            return float(x)
+            return float(s)
         except:
             return default
-    for c in ["MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]:
-        df[c] = df[c].map(lambda v: _to_num(v, 0.0))
+
+    # ---- convertir columnas numéricas ----
+    df["MS"]       = df["MS"].map(lambda v: _to_num(v, 0.0))
+    df["TND (%)"]  = df["TND (%)"].map(lambda v: _to_num(v, 0.0))
+    df["PB"]       = df["PB"].map(lambda v: _to_num(v, 0.0))
+    df["EE"]       = df["EE"].map(lambda v: _to_num(v, 0.0))
+    df["COEF ATC"] = df["COEF ATC"].map(lambda v: _to_num(v, 0.0))
+    df["$/KG"]     = df["$/KG"].map(lambda v: _to_num(v, 0.0))
+    df["EM"]       = df["EM"].map(lambda v: _to_num(v, 0.0))
+    df["ENP2"]     = df["ENP2"].map(lambda v: _to_num(v, 0.0))
+
+    # ---- escalar MS si viene como fracción (0.88 → 88) ----
+    df.loc[df["MS"] <= 1.0, "MS"] = df.loc[df["MS"] <= 1.0, "MS"] * 100.0
+
+    # (opcional) si TND viniera como 0.86, escalar a 86
+    if (df["TND (%)"] <= 1.0).any() and (df["TND (%)"] > 0).any():
+        df.loc[df["TND (%)"] <= 1.0, "TND (%)"] = df.loc[df["TND (%)"] <= 1.0, "TND (%)"] * 100.0
+
+    # ---- texto limpio ----
     for c in ["ORIGEN","PRESENTACION","TIPO"]:
-        df[c] = df[c].fillna("").astype(str)
+        df[c] = df[c].fillna("").astype(str).str.strip()
+
     return df
 
 @st.cache_data
