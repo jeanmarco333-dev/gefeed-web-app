@@ -1,3 +1,13 @@
-cod,nombre
-2,R-JOSE
-3,term
+id,NOMBRE,ETAPA
+1,R-DTTE,RECRIA
+2,R-JOSE,RECRIA
+3,term,RECRIA
+4,R-ALTA PROTEINA,RECRIA
+5,R-SUPER,RECRIA
+6,R-TERCERA BAJA,terminacion
+7,T-LEVANTE,terminacion
+8,T-MG STD,terminacion
+9,T-MG SECO,terminacion
+10,T-MG HUMEDO,terminacion
+11,Test No usar,
+12,T-ALFA,
