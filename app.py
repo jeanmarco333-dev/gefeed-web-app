@@ -29,6 +29,7 @@ MIXERS_PATH = os.path.join(DATA_DIR, "mixers.csv")
 PESOS_PATH  = os.path.join(DATA_DIR, "pesos.csv")
 CATALOG_PATH= os.path.join(DATA_DIR, "raciones_catalog.csv")
 RECIPES_PATH= os.path.join(DATA_DIR, "raciones_recipes.csv")
+PROTEIN_PATH= os.path.join(DATA_DIR, "requerimiento_proteico.csv")
 
 ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
 
@@ -51,6 +52,8 @@ if not os.path.exists(BASE_PATH):
         "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
         "kg_turno","AP_obt","turnos","meta_salida","dias_TERM","semanas_TERM","EFC_conv"
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
+if not os.path.exists(PROTEIN_PATH):
+    pd.DataFrame(columns=["peso_kg","categoria","ap_kg_dia","req_proteico"]).to_csv(PROTEIN_PATH, index=False, encoding="utf-8")
 
 # ------------------------------------------------------------------------------
 # Normalización de alimentos
@@ -142,6 +145,40 @@ def save_pesos(df: pd.DataFrame):
     out = df.copy()
     out["peso_kg"] = pd.to_numeric(out["peso_kg"], errors="coerce")
     out.dropna().sort_values("peso_kg").to_csv(PESOS_PATH, index=False, encoding="utf-8")
+
+@st.cache_data
+def load_protein_requirements() -> pd.DataFrame:
+    try:
+        df = pd.read_csv(PROTEIN_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame(columns=["peso_kg","categoria","ap_kg_dia","req_proteico"])
+
+    if "peso_kg" not in df.columns:
+        df["peso_kg"] = pd.Series(dtype="float64")
+    if "categoria" not in df.columns:
+        df["categoria"] = pd.Series(dtype="object")
+    if "ap_kg_dia" not in df.columns:
+        df["ap_kg_dia"] = pd.Series(dtype="float64")
+    if "req_proteico" not in df.columns:
+        df["req_proteico"] = pd.Series(dtype="float64")
+
+    df["peso_kg"] = pd.to_numeric(df["peso_kg"], errors="coerce").fillna(0.0)
+    df["ap_kg_dia"] = pd.to_numeric(df["ap_kg_dia"], errors="coerce").fillna(0.0)
+    df["req_proteico"] = pd.to_numeric(df["req_proteico"], errors="coerce").fillna(0.0)
+    df["categoria"] = df["categoria"].fillna("").astype(str)
+
+    df = df[(df["peso_kg"] > 0) & (df["ap_kg_dia"] >= 0)]
+    df = df.drop_duplicates().sort_values(["categoria","peso_kg","ap_kg_dia"]).reset_index(drop=True)
+    return df
+
+def save_protein_requirements(df: pd.DataFrame):
+    out = df.copy()
+    out["peso_kg"] = pd.to_numeric(out.get("peso_kg"), errors="coerce")
+    out["ap_kg_dia"] = pd.to_numeric(out.get("ap_kg_dia"), errors="coerce")
+    out["req_proteico"] = pd.to_numeric(out.get("req_proteico"), errors="coerce")
+    out["categoria"] = out.get("categoria", "").fillna("").astype(str)
+    out = out.dropna(subset=["peso_kg","ap_kg_dia"]).sort_values(["categoria","peso_kg","ap_kg_dia"])
+    out.to_csv(PROTEIN_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -322,7 +359,7 @@ with tab3:
 with tab4:
     st.subheader("⬇️ Exportar datos y simulaciones")
     files_to_zip = []
-    for fname in ["alimentos.csv","raciones.json","raciones_base.csv","mixers.csv","pesos.csv","raciones_catalog.csv","raciones_recipes.csv"]:
+    for fname in ["alimentos.csv","raciones.json","raciones_base.csv","mixers.csv","pesos.csv","raciones_catalog.csv","raciones_recipes.csv","requerimiento_proteico.csv"]:
         f = os.path.join(DATA_DIR, fname)
         if os.path.exists(f): files_to_zip.append(f)
     if files_to_zip:
@@ -500,6 +537,37 @@ with tab6:
     p1, p2 = st.columns(2)
     if p1.button("💾 Guardar PV (kg)"):
         save_pesos(grid_pes); st.success("Lista de PV guardada.")
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Requerimiento proteico (g/día)")
+    prot_df = load_protein_requirements()
+    default_cats = ["novillos", "vaquillonas"]
+    cat_options = sorted({c.strip() for c in prot_df["categoria"].astype(str).tolist() if c.strip()})
+    for c in default_cats:
+        if c not in cat_options:
+            cat_options.append(c)
+    cat_options = [""] + sorted(cat_options)
+
+    grid_prot = st.data_editor(
+        prot_df,
+        column_config={
+            "peso_kg": st.column_config.NumberColumn("PV (kg)", min_value=1.0, max_value=2000.0, step=0.5),
+            "categoria": st.column_config.SelectboxColumn("Categoría", options=cat_options),
+            "ap_kg_dia": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=5.0, step=0.1),
+            "req_proteico": st.column_config.NumberColumn("Req. proteico (g/día)", min_value=0.0, max_value=5000.0, step=1.0),
+        },
+        num_rows="dynamic", use_container_width=True, hide_index=True, key="param_proteico"
+    )
+    pr1, pr2 = st.columns(2)
+    if pr1.button("💾 Guardar tabla proteica"):
+        save_protein_requirements(grid_prot); st.success("Tabla de requerimiento proteico guardada.")
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+    if pr2.button("🔄 Recargar tabla proteica"):
         try: st.cache_data.clear()
         except: pass
         st.rerun()
