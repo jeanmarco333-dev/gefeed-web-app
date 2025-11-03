@@ -173,7 +173,7 @@ with tab1:
                 alimentos_df.loc[len(alimentos_df)] = new_row
                 save_alimentos(alimentos_df)
                 st.success(f"Agregado: {origen}")
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("El campo ORIGEN no puede estar vacío.")
 
