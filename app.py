@@ -1,20 +1,20 @@
 # app.py — JM P-Feedlot v0.26 (100% web)
-# Pestañas: 📦 Alimentos | 🥣 Formulador | 🧮 Mixer | ⬇️ Exportar | 📊 Corrales | ⚙️ Parámetros | 🧾 Raciones
+# Pestañas: 📦 Alimentos | 🧮 Mixer | ⬇️ Exportar | 📊 Corrales | ⚙️ Parámetros | 🧾 Creador/Editor de raciones
 # Estructura:
 #   app.py, calc_engine.py, requirements.txt
-#   data/: alimentos.csv, raciones.json, raciones_base.csv, mixers.csv, pesos.csv, raciones_catalog.csv, raciones_recipes.csv
+#   data/: alimentos.csv, raciones_base.csv, mixers.csv, pesos.csv, raciones_catalog.csv, raciones_recipes.csv
 
-import os, json, io, zipfile, datetime
+import os, io, zipfile, datetime
 import streamlit as st
 import pandas as pd
-from calc_engine import Food, Ingredient, analyze_ration, mixer_kg_by_ingredient
+from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
 
 # ------------------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 st.title("JM P-Feedlot v0.26 — Web")
-st.caption("Catálogo • Formulación EM/PB • Mixer as-fed • Corrales • Parámetros • Raciones • Export ZIP")
+st.caption("Catálogo • Mixer as-fed • Corrales • Parámetros • Raciones • Export ZIP")
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -23,21 +23,19 @@ DATA_DIR = os.getenv("DATA_DIR", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 ALIM_PATH = os.path.join(DATA_DIR, "alimentos.csv")
-RAC_PATH  = os.path.join(DATA_DIR, "raciones.json")
 BASE_PATH = os.path.join(DATA_DIR, "raciones_base.csv")
 MIXERS_PATH = os.path.join(DATA_DIR, "mixers.csv")
 PESOS_PATH  = os.path.join(DATA_DIR, "pesos.csv")
 CATALOG_PATH= os.path.join(DATA_DIR, "raciones_catalog.csv")
 RECIPES_PATH= os.path.join(DATA_DIR, "raciones_recipes.csv")
-PROTEIN_PATH= os.path.join(DATA_DIR, "requerimiento_proteico.csv")
+REQENER_PATH= os.path.join(DATA_DIR, "requerimientos_energeticos.csv")
 
 ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
+REQENER_COLS = ["peso","cat","requerimiento_energetico","ap"]
 
 # Crear archivos mínimos si faltan
 if not os.path.exists(ALIM_PATH):
     pd.DataFrame(columns=ALIM_COLS).to_csv(ALIM_PATH, index=False, encoding="utf-8")
-if not os.path.exists(RAC_PATH):
-    with open(RAC_PATH, "w", encoding="utf-8") as f: json.dump([], f, ensure_ascii=False, indent=2)
 if not os.path.exists(MIXERS_PATH):
     pd.DataFrame({"mixer_id":["MX-4200","MX-6000"], "capacidad_kg":[4200,6000]}).to_csv(MIXERS_PATH, index=False, encoding="utf-8")
 if not os.path.exists(PESOS_PATH):
@@ -52,8 +50,8 @@ if not os.path.exists(BASE_PATH):
         "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
         "kg_turno","AP_obt","turnos","meta_salida","dias_TERM","semanas_TERM","EFC_conv"
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
-if not os.path.exists(PROTEIN_PATH):
-    pd.DataFrame(columns=["peso_kg","categoria","ap_kg_dia","req_proteico"]).to_csv(PROTEIN_PATH, index=False, encoding="utf-8")
+if not os.path.exists(REQENER_PATH):
+    pd.DataFrame(columns=["peso","cat","requerimiento_energetico","ap"]).to_csv(REQENER_PATH, index=False, encoding="utf-8")
 
 # ------------------------------------------------------------------------------
 # Normalización de alimentos
@@ -114,17 +112,6 @@ def save_alimentos(df: pd.DataFrame):
     _normalize_columns(df.copy()).to_csv(ALIM_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
-def load_raciones() -> list:
-    try:
-        with open(RAC_PATH, "r", encoding="utf-8") as f: data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-def save_raciones(data: list):
-    with open(RAC_PATH, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
-
-@st.cache_data
 def load_mixers() -> pd.DataFrame:
     try: df = pd.read_csv(MIXERS_PATH, encoding="utf-8-sig")
     except: df = pd.DataFrame({"mixer_id":[], "capacidad_kg":[]})
@@ -147,38 +134,32 @@ def save_pesos(df: pd.DataFrame):
     out.dropna().sort_values("peso_kg").to_csv(PESOS_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
-def load_protein_requirements() -> pd.DataFrame:
+def load_reqener() -> pd.DataFrame:
     try:
-        df = pd.read_csv(PROTEIN_PATH, encoding="utf-8-sig")
+        df = pd.read_csv(REQENER_PATH, encoding="utf-8-sig")
     except Exception:
-        df = pd.DataFrame(columns=["peso_kg","categoria","ap_kg_dia","req_proteico"])
+        df = pd.DataFrame(columns=REQENER_COLS)
 
-    if "peso_kg" not in df.columns:
-        df["peso_kg"] = pd.Series(dtype="float64")
-    if "categoria" not in df.columns:
-        df["categoria"] = pd.Series(dtype="object")
-    if "ap_kg_dia" not in df.columns:
-        df["ap_kg_dia"] = pd.Series(dtype="float64")
-    if "req_proteico" not in df.columns:
-        df["req_proteico"] = pd.Series(dtype="float64")
+    for col in REQENER_COLS:
+        if col not in df.columns:
+            df[col] = None
+    df = df[REQENER_COLS]
 
-    df["peso_kg"] = pd.to_numeric(df["peso_kg"], errors="coerce").fillna(0.0)
-    df["ap_kg_dia"] = pd.to_numeric(df["ap_kg_dia"], errors="coerce").fillna(0.0)
-    df["req_proteico"] = pd.to_numeric(df["req_proteico"], errors="coerce").fillna(0.0)
-    df["categoria"] = df["categoria"].fillna("").astype(str)
+    df["peso"] = pd.to_numeric(df["peso"], errors="coerce")
+    df["requerimiento_energetico"] = pd.to_numeric(df["requerimiento_energetico"], errors="coerce")
+    df["ap"] = pd.to_numeric(df["ap"], errors="coerce")
+    df["cat"] = df["cat"].fillna("").astype(str)
 
-    df = df[(df["peso_kg"] > 0) & (df["ap_kg_dia"] >= 0)]
-    df = df.drop_duplicates().sort_values(["categoria","peso_kg","ap_kg_dia"]).reset_index(drop=True)
-    return df
+    return df.sort_values(["cat","peso","ap"], na_position="last").reset_index(drop=True)
 
-def save_protein_requirements(df: pd.DataFrame):
+def save_reqener(df: pd.DataFrame):
     out = df.copy()
-    out["peso_kg"] = pd.to_numeric(out.get("peso_kg"), errors="coerce")
-    out["ap_kg_dia"] = pd.to_numeric(out.get("ap_kg_dia"), errors="coerce")
-    out["req_proteico"] = pd.to_numeric(out.get("req_proteico"), errors="coerce")
-    out["categoria"] = out.get("categoria", "").fillna("").astype(str)
-    out = out.dropna(subset=["peso_kg","ap_kg_dia"]).sort_values(["categoria","peso_kg","ap_kg_dia"])
-    out.to_csv(PROTEIN_PATH, index=False, encoding="utf-8")
+    out["peso"] = pd.to_numeric(out["peso"], errors="coerce")
+    out["requerimiento_energetico"] = pd.to_numeric(out["requerimiento_energetico"], errors="coerce")
+    out["ap"] = pd.to_numeric(out["ap"], errors="coerce")
+    out["cat"] = out["cat"].fillna("").astype(str)
+    out = out[REQENER_COLS]
+    out.to_csv(REQENER_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -223,6 +204,75 @@ def save_recipes(df: pd.DataFrame):
     out = out[out["ingrediente"].astype(str).str.strip()!=""]
     out.to_csv(RECIPES_PATH, index=False, encoding="utf-8")
 
+def build_raciones_from_recipes() -> list:
+    cat = load_catalog()
+    rec = load_recipes()
+    if cat.empty or rec.empty:
+        return []
+
+    alimentos = load_alimentos()
+    if alimentos.empty:
+        return []
+
+    lookup = {}
+    for _, row in alimentos.iterrows():
+        nombre = str(row.get("ORIGEN", "")).strip()
+        if not nombre:
+            continue
+        lookup[nombre.lower()] = row
+
+    def _num(value, default=0.0):
+        try:
+            val = float(pd.to_numeric(value, errors="coerce"))
+        except Exception:
+            return default
+        return default if pd.isna(val) else val
+
+    def _text(value):
+        if pd.isna(value):
+            return ""
+        return str(value)
+
+    raciones = []
+    for _, row in cat.iterrows():
+        rid = int(row.get("id", 0))
+        nombre = _text(row.get("nombre", "")).strip() or f"Ración {rid}"
+        receta = rec[rec["id_racion"] == rid]
+        if receta.empty:
+            continue
+
+        ingredientes = []
+        for _, ing in receta.iterrows():
+            ing_name = _text(ing.get("ingrediente", "")).strip()
+            if not ing_name:
+                continue
+            ref = lookup.get(ing_name.lower())
+            if ref is None:
+                ref = {}
+
+            ingredientes.append({
+                "ORIGEN": ing_name,
+                "PRESENTACION": _text(ref.get("PRESENTACION", "")),
+                "TIPO": _text(ref.get("TIPO", "")),
+                "MS": _num(ref.get("MS", 100.0), 100.0),
+                "TND (%)": _num(ref.get("TND (%)", 0.0), 0.0),
+                "PB": _num(ref.get("PB", 0.0), 0.0),
+                "EE": _num(ref.get("EE", 0.0), 0.0),
+                "COEF ATC": _num(ref.get("COEF ATC", 0.0), 0.0),
+                "$/KG": _num(ref.get("$/KG", 0.0), 0.0),
+                "EM": _num(ref.get("EM", 0.0), 0.0),
+                "ENP2": _num(ref.get("ENP2", 0.0), 0.0),
+                "inclusion_pct": _num(ing.get("pct_ms", 0.0), 0.0)
+            })
+
+        ingredientes = [i for i in ingredientes if i["inclusion_pct"] > 0]
+        if not ingredientes:
+            continue
+
+        raciones.append({"id": rid, "nombre": nombre, "ingredientes": ingredientes})
+
+    return raciones
+
 @st.cache_data
 def load_base() -> pd.DataFrame:
     try: return pd.read_csv(BASE_PATH, encoding="utf-8-sig")
@@ -234,8 +284,8 @@ def save_base(df: pd.DataFrame):
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-    ["📦 Alimentos", "🥣 Formulador", "🧮 Mixer", "⬇️ Exportar", "📊 Corrales", "⚙️ Parámetros", "🧾 Raciones"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📦 Alimentos", "🧮 Mixer", "⬇️ Exportar", "📊 Corrales", "⚙️ Parámetros", "🧾 Creador/Editor de raciones"]
 )
 
 # ------------------------------------------------------------------------------
@@ -260,85 +310,23 @@ with tab1:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 🥣 Formulador
-# ------------------------------------------------------------------------------
-with tab2:
-    st.subheader("Formulación de ración (EM/PB)")
-    c1, c2, c3 = st.columns(3)
-    target_em = c1.number_input("EM objetivo (Mcal/kg MS)", 0.0, 10.0, 2.6, step=0.01)
-    target_pb = c2.number_input("PB objetivo (% MS)", 0.0, 100.0, 13.0, step=0.1)
-    ration_name = c3.text_input("Nombre de la ración", "Ración Demo")
-
-    st.markdown("### Ingredientes (% inclusión en base MS)")
-    alimentos_df = load_alimentos()
-    if alimentos_df.empty or alimentos_df["ORIGEN"].eq("").all():
-        st.info("Cargá el catálogo de alimentos en Alimentos/Parámetros.")
-    else:
-        editable = alimentos_df.copy()
-        if "inclusion_pct" not in editable.columns: editable["inclusion_pct"] = 0.0
-        grid = st.data_editor(editable[ALIM_COLS + ["inclusion_pct"]], num_rows="dynamic", use_container_width=True, hide_index=True, key="grid_formulador")
-
-        rows = grid[grid["inclusion_pct"] > 0]
-        ings = []
-        for _, r in rows.iterrows():
-            dm_pct = float(pd.to_numeric(r.get("MS", 100.0), errors="coerce") or 100.0)
-            food = Food(name=str(r["ORIGEN"]),
-                        em=float(pd.to_numeric(r.get("EM", 0.0), errors="coerce") or 0.0),
-                        pb=float(pd.to_numeric(r.get("PB", 0.0), errors="coerce") or 0.0),
-                        dm=dm_pct)
-            ings.append(Ingredient(food=food, inclusion_pct=float(pd.to_numeric(r.get("inclusion_pct", 0.0), errors="coerce") or 0.0)))
-
-        col_a, col_b = st.columns([1,1])
-        if col_a.button("Calcular EM/PB"):
-            res = analyze_ration(ings, target_em, target_pb)
-            sum_pct = float(rows["inclusion_pct"].sum())
-            st.metric("EM calculada (Mcal/kg MS)", res.em)
-            st.metric("PB calculada (% MS)", res.pb)
-            st.metric("Desvío EM", res.dev_em)
-            st.metric("Desvío PB", res.dev_pb)
-            st.write(f"**Suma de inclusiones**: {sum_pct:.2f}%")
-
-        if col_b.button("Guardar ración"):
-            payload = {"name": ration_name, "target_em": float(target_em), "target_pb": float(target_pb), "ingredients": []}
-            for _, r in rows.iterrows():
-                payload["ingredients"].append({
-                    "ORIGEN": str(r["ORIGEN"]),
-                    "PRESENTACION": str(r.get("PRESENTACION", "")),
-                    "TIPO": str(r.get("TIPO", "")),
-                    "MS": float(pd.to_numeric(r.get("MS", 100.0), errors="coerce") or 100.0),
-                    "TND (%)": float(pd.to_numeric(r.get("TND (%)", 0.0), errors="coerce") or 0.0),
-                    "PB": float(pd.to_numeric(r.get("PB", 0.0), errors="coerce") or 0.0),
-                    "EE": float(pd.to_numeric(r.get("EE", 0.0), errors="coerce") or 0.0),
-                    "COEF ATC": float(pd.to_numeric(r.get("COEF ATC", 0.0), errors="coerce") or 0.0),
-                    "$/KG": float(pd.to_numeric(r.get("$/KG", 0.0), errors="coerce") or 0.0),
-                    "EM": float(pd.to_numeric(r.get("EM", 0.0), errors="coerce") or 0.0),
-                    "ENP2": float(pd.to_numeric(r.get("ENP2", 0.0), errors="coerce") or 0.0),
-                    "inclusion_pct": float(pd.to_numeric(r.get("inclusion_pct", 0.0), errors="coerce") or 0.0)
-                })
-            rs = load_raciones(); rs.append(payload); save_raciones(rs)
-            st.success(f"Ración '{ration_name}' guardada.")
-            try: st.cache_data.clear()
-            except: pass
-            st.rerun()
-
-# ------------------------------------------------------------------------------
 # 🧮 Mixer
 # ------------------------------------------------------------------------------
-with tab3:
+with tab2:
     st.subheader("Cálculo de descarga de mixer (as-fed)")
     total_kg = st.number_input("Total del mixer (kg, as-fed)", 0.0, 50000.0, 5000.0, step=10.0)
 
-    raciones = load_raciones()
+    raciones = build_raciones_from_recipes()
     if not raciones:
-        st.info("Guardá al menos una ración en Formulador.")
+        st.info("Definí recetas en la pestaña 🧾 Creador/Editor de raciones.")
     else:
-        pick = st.selectbox("Ración a usar (de Formulador)", [r["name"] for r in raciones])
-        ra = next(r for r in raciones if r["name"] == pick)
+        pick = st.selectbox("Ración a usar", [r["nombre"] for r in raciones])
+        ra = next(r for r in raciones if r["nombre"] == pick)
 
         ings = []
-        for x in ra["ingredients"]:
+        for x in ra["ingredientes"]:
             dm_pct = float(pd.to_numeric(x.get("MS", 100.0), errors="coerce") or 100.0)
-            food = Food(name=str(x.get("ORIGEN","Ingrediente")),
+            food = Food(name=str(x.get("ORIGEN", "Ingrediente")),
                         em=float(pd.to_numeric(x.get("EM", 0.0), errors="coerce") or 0.0),
                         pb=float(pd.to_numeric(x.get("PB", 0.0), errors="coerce") or 0.0),
                         dm=dm_pct)
@@ -356,10 +344,10 @@ with tab3:
 # ------------------------------------------------------------------------------
 # ⬇️ Exportar
 # ------------------------------------------------------------------------------
-with tab4:
+with tab3:
     st.subheader("⬇️ Exportar datos y simulaciones")
     files_to_zip = []
-    for fname in ["alimentos.csv","raciones.json","raciones_base.csv","mixers.csv","pesos.csv","raciones_catalog.csv","raciones_recipes.csv","requerimiento_proteico.csv"]:
+    for fname in ["alimentos.csv","raciones_base.csv","mixers.csv","pesos.csv","raciones_catalog.csv","raciones_recipes.csv"]:
         f = os.path.join(DATA_DIR, fname)
         if os.path.exists(f): files_to_zip.append(f)
     if files_to_zip:
@@ -376,7 +364,7 @@ with tab4:
 # ------------------------------------------------------------------------------
 # 📊 Corrales
 # ------------------------------------------------------------------------------
-with tab5:
+with tab4:
     st.subheader("📊 Base de Corrales y Raciones")
     cat_df = load_catalog()
     mix_df = load_mixers()
@@ -500,7 +488,7 @@ with tab5:
 # ------------------------------------------------------------------------------
 # ⚙️ Parámetros
 # ------------------------------------------------------------------------------
-with tab6:
+with tab5:
     st.subheader("⚙️ Parámetros técnicos")
 
     st.markdown("### Catálogo de alimentos")
@@ -542,41 +530,34 @@ with tab6:
         st.rerun()
 
     st.markdown("---")
-    st.markdown("### Requerimiento proteico (g/día)")
-    prot_df = load_protein_requirements()
-    default_cats = ["novillos", "vaquillonas"]
-    cat_options = sorted({c.strip() for c in prot_df["categoria"].astype(str).tolist() if c.strip()})
-    for c in default_cats:
-        if c not in cat_options:
-            cat_options.append(c)
-    cat_options = [""] + sorted(cat_options)
-
-    grid_prot = st.data_editor(
-        prot_df,
+    st.markdown("### Requerimientos energéticos (EM Mcal/día)")
+    req_df = load_reqener()
+    grid_req = st.data_editor(
+        req_df,
         column_config={
-            "peso_kg": st.column_config.NumberColumn("PV (kg)", min_value=1.0, max_value=2000.0, step=0.5),
-            "categoria": st.column_config.SelectboxColumn("Categoría", options=cat_options),
-            "ap_kg_dia": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=5.0, step=0.1),
-            "req_proteico": st.column_config.NumberColumn("Req. proteico (g/día)", min_value=0.0, max_value=5000.0, step=1.0),
+            "peso": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=2000.0, step=0.5),
+            "cat": st.column_config.TextColumn("Categoría"),
+            "requerimiento_energetico": st.column_config.NumberColumn("Req. energético (Mcal EM/día)", min_value=0.0, max_value=50.0, step=0.1),
+            "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=10.0, step=0.1),
         },
-        num_rows="dynamic", use_container_width=True, hide_index=True, key="param_proteico"
+        num_rows="dynamic", use_container_width=True, hide_index=True, key="param_reqener"
     )
-    pr1, pr2 = st.columns(2)
-    if pr1.button("💾 Guardar tabla proteica"):
-        save_protein_requirements(grid_prot); st.success("Tabla de requerimiento proteico guardada.")
+    r1, r2 = st.columns(2)
+    if r1.button("💾 Guardar requerimientos energéticos"):
+        save_reqener(grid_req); st.success("Requerimientos energéticos guardados.")
         try: st.cache_data.clear()
         except: pass
         st.rerun()
-    if pr2.button("🔄 Recargar tabla proteica"):
+    if r2.button("🔄 Recargar requerimientos"):
         try: st.cache_data.clear()
         except: pass
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 🧾 Raciones (catálogo + recetas)
+# 🧾 Creador/Editor de raciones (catálogo + recetas)
 # ------------------------------------------------------------------------------
-with tab7:
-    st.subheader("🧾 Raciones (catálogo y recetas)")
+with tab6:
+    st.subheader("🧾 Creador/Editor de raciones")
     st.caption("Definí hasta 6 ingredientes por ración (suma 100% MS).")
 
     cat = load_catalog()
