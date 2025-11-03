@@ -29,9 +29,11 @@ PESOS_PATH  = os.path.join(DATA_DIR, "pesos.csv")
 CATALOG_PATH= os.path.join(DATA_DIR, "raciones_catalog.csv")
 RECIPES_PATH= os.path.join(DATA_DIR, "raciones_recipes.csv")
 REQENER_PATH= os.path.join(DATA_DIR, "requerimientos_energeticos.csv")
+REQPROT_PATH= os.path.join(DATA_DIR, "requerimiento_proteico.csv")
 
 ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
 REQENER_COLS = ["peso","cat","requerimiento_energetico","ap"]
+REQPROT_COLS = ["peso","cat","ap","req_proteico"]
 
 # Crear archivos mínimos si faltan
 if not os.path.exists(ALIM_PATH):
@@ -52,6 +54,8 @@ if not os.path.exists(BASE_PATH):
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
 if not os.path.exists(REQENER_PATH):
     pd.DataFrame(columns=["peso","cat","requerimiento_energetico","ap"]).to_csv(REQENER_PATH, index=False, encoding="utf-8")
+if not os.path.exists(REQPROT_PATH):
+    pd.DataFrame(columns=["peso","cat","ap","req_proteico"]).to_csv(REQPROT_PATH, index=False, encoding="utf-8")
 
 # ------------------------------------------------------------------------------
 # Normalización de alimentos
@@ -160,6 +164,47 @@ def save_reqener(df: pd.DataFrame):
     out["cat"] = out["cat"].fillna("").astype(str)
     out = out[REQENER_COLS]
     out.to_csv(REQENER_PATH, index=False, encoding="utf-8")
+
+@st.cache_data
+def load_reqprot() -> pd.DataFrame:
+    try:
+        df = pd.read_csv(REQPROT_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame(columns=REQPROT_COLS)
+
+    rename_map = {}
+    for col in df.columns:
+        cname = str(col).strip().lower()
+        if cname in ("peso", "peso_kg", "pv", "pv_kg"):
+            rename_map[col] = "peso"
+        elif cname in ("cat", "categoria", "categoría"):
+            rename_map[col] = "cat"
+        elif cname in ("ap", "ap_kg_dia", "ap_kg/dia", "ap_kg-dia"):
+            rename_map[col] = "ap"
+        elif cname in ("req_proteico", "requerimiento_proteico", "proteina", "proteína"):
+            rename_map[col] = "req_proteico"
+    df = df.rename(columns=rename_map)
+
+    for col in REQPROT_COLS:
+        if col not in df.columns:
+            df[col] = None
+    df = df[REQPROT_COLS]
+
+    df["peso"] = pd.to_numeric(df["peso"], errors="coerce")
+    df["ap"] = pd.to_numeric(df["ap"], errors="coerce")
+    df["req_proteico"] = pd.to_numeric(df["req_proteico"], errors="coerce")
+    df["cat"] = df["cat"].fillna("").astype(str)
+
+    return df.sort_values(["cat","peso","ap"], na_position="last").reset_index(drop=True)
+
+def save_reqprot(df: pd.DataFrame):
+    out = df.copy()
+    out["peso"] = pd.to_numeric(out["peso"], errors="coerce")
+    out["ap"] = pd.to_numeric(out["ap"], errors="coerce")
+    out["req_proteico"] = pd.to_numeric(out["req_proteico"], errors="coerce")
+    out["cat"] = out["cat"].fillna("").astype(str)
+    out = out[REQPROT_COLS]
+    out.to_csv(REQPROT_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -549,6 +594,30 @@ with tab5:
         except: pass
         st.rerun()
     if r2.button("🔄 Recargar requerimientos"):
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Requerimientos proteicos (g PB/día)")
+    reqprot_df = load_reqprot()
+    grid_reqprot = st.data_editor(
+        reqprot_df,
+        column_config={
+            "peso": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=2000.0, step=0.5),
+            "cat": st.column_config.TextColumn("Categoría"),
+            "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=20.0, step=0.1),
+            "req_proteico": st.column_config.NumberColumn("Req. proteico (g PB/día)", min_value=0.0, max_value=5000.0, step=1.0),
+        },
+        num_rows="dynamic", use_container_width=True, hide_index=True, key="param_reqprot"
+    )
+    rp1, rp2 = st.columns(2)
+    if rp1.button("💾 Guardar requerimientos proteicos"):
+        save_reqprot(grid_reqprot); st.success("Requerimientos proteicos guardados.")
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+    if rp2.button("🔄 Recargar requerimientos proteicos"):
         try: st.cache_data.clear()
         except: pass
         st.rerun()
