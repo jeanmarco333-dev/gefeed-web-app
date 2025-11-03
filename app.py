@@ -28,8 +28,10 @@ MIXERS_PATH = os.path.join(DATA_DIR, "mixers.csv")
 PESOS_PATH  = os.path.join(DATA_DIR, "pesos.csv")
 CATALOG_PATH= os.path.join(DATA_DIR, "raciones_catalog.csv")
 RECIPES_PATH= os.path.join(DATA_DIR, "raciones_recipes.csv")
+REQENER_PATH= os.path.join(DATA_DIR, "requerimientos_energeticos.csv")
 
 ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
+REQENER_COLS = ["peso","cat","requerimiento_energetico","ap"]
 
 # Crear archivos mínimos si faltan
 if not os.path.exists(ALIM_PATH):
@@ -48,6 +50,8 @@ if not os.path.exists(BASE_PATH):
         "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
         "kg_turno","AP_obt","turnos","meta_salida","dias_TERM","semanas_TERM","EFC_conv"
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
+if not os.path.exists(REQENER_PATH):
+    pd.DataFrame(columns=["peso","cat","requerimiento_energetico","ap"]).to_csv(REQENER_PATH, index=False, encoding="utf-8")
 
 # ------------------------------------------------------------------------------
 # Normalización de alimentos
@@ -128,6 +132,34 @@ def save_pesos(df: pd.DataFrame):
     out = df.copy()
     out["peso_kg"] = pd.to_numeric(out["peso_kg"], errors="coerce")
     out.dropna().sort_values("peso_kg").to_csv(PESOS_PATH, index=False, encoding="utf-8")
+
+@st.cache_data
+def load_reqener() -> pd.DataFrame:
+    try:
+        df = pd.read_csv(REQENER_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame(columns=REQENER_COLS)
+
+    for col in REQENER_COLS:
+        if col not in df.columns:
+            df[col] = None
+    df = df[REQENER_COLS]
+
+    df["peso"] = pd.to_numeric(df["peso"], errors="coerce")
+    df["requerimiento_energetico"] = pd.to_numeric(df["requerimiento_energetico"], errors="coerce")
+    df["ap"] = pd.to_numeric(df["ap"], errors="coerce")
+    df["cat"] = df["cat"].fillna("").astype(str)
+
+    return df.sort_values(["cat","peso","ap"], na_position="last").reset_index(drop=True)
+
+def save_reqener(df: pd.DataFrame):
+    out = df.copy()
+    out["peso"] = pd.to_numeric(out["peso"], errors="coerce")
+    out["requerimiento_energetico"] = pd.to_numeric(out["requerimiento_energetico"], errors="coerce")
+    out["ap"] = pd.to_numeric(out["ap"], errors="coerce")
+    out["cat"] = out["cat"].fillna("").astype(str)
+    out = out[REQENER_COLS]
+    out.to_csv(REQENER_PATH, index=False, encoding="utf-8")
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -493,6 +525,30 @@ with tab5:
     p1, p2 = st.columns(2)
     if p1.button("💾 Guardar PV (kg)"):
         save_pesos(grid_pes); st.success("Lista de PV guardada.")
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Requerimientos energéticos (EM Mcal/día)")
+    req_df = load_reqener()
+    grid_req = st.data_editor(
+        req_df,
+        column_config={
+            "peso": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=2000.0, step=0.5),
+            "cat": st.column_config.TextColumn("Categoría"),
+            "requerimiento_energetico": st.column_config.NumberColumn("Req. energético (Mcal EM/día)", min_value=0.0, max_value=50.0, step=0.1),
+            "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=10.0, step=0.1),
+        },
+        num_rows="dynamic", use_container_width=True, hide_index=True, key="param_reqener"
+    )
+    r1, r2 = st.columns(2)
+    if r1.button("💾 Guardar requerimientos energéticos"):
+        save_reqener(grid_req); st.success("Requerimientos energéticos guardados.")
+        try: st.cache_data.clear()
+        except: pass
+        st.rerun()
+    if r2.button("🔄 Recargar requerimientos"):
         try: st.cache_data.clear()
         except: pass
         st.rerun()
