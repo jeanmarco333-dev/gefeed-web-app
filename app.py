@@ -9,9 +9,9 @@ from __future__ import annotations
 import io
 import os
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from contextlib import contextmanager
 
 import pandas as pd
 import streamlit as st
@@ -21,18 +21,53 @@ from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
 import yaml
 import streamlit_authenticator as stauth
 
+# --- Columnas base (constantes) ---
+ALIM_COLS = [
+    "ORIGEN",
+    "PRESENTACION",
+    "TIPO",
+    "MS",
+    "TND (%)",
+    "PB",
+    "EE",
+    "COEF ATC",
+    "$/KG",
+    "EM",
+    "ENP2",
+]
+
+REQENER_COLS = ["peso", "cat", "requerimiento_energetico", "ap"]
+REQPROT_COLS = ["peso", "cat", "ap", "req_proteico"]
+
+
+def _num(x, default=0.0):
+    try:
+        val = float(pd.to_numeric(x, errors="coerce"))
+        return default if pd.isna(val) else val
+    except Exception:
+        return default
+
 # ------------------------------------------------------------------------------
 # Configuración global (debe ir antes de cualquier llamada a Streamlit)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 
-CFG = yaml.safe_load(Path("config_users.yaml").read_text(encoding="utf-8"))
-authenticator = stauth.Authenticate(
-    CFG["credentials"],
-    CFG["cookie"]["name"],
-    CFG["cookie"]["key"],
-    CFG["cookie"]["expiry_days"],
-)
+CFG_PATH = Path("config_users.yaml")
+if not CFG_PATH.exists():
+    st.error("Falta archivo de configuración de usuarios: config_users.yaml")
+    st.stop()
+
+try:
+    CFG = yaml.safe_load(CFG_PATH.read_text(encoding="utf-8")) or {}
+    authenticator = stauth.Authenticate(
+        CFG.get("credentials", {}),
+        CFG.get("cookie", {}).get("name", "feedlot_cookie"),
+        CFG.get("cookie", {}).get("key", "feedlot_key"),
+        CFG.get("cookie", {}).get("expiry_days", 1),
+    )
+except Exception as e:
+    st.error(f"Error leyendo config_users.yaml: {e}")
+    st.stop()
 
 name, auth_status, username = authenticator.login(location="main")
 if auth_status is False:
@@ -96,9 +131,6 @@ def chip(text: str, ok: bool=True):
 # ------------------------------------------------------------------------------
 # Paths (multiusuario)
 # ------------------------------------------------------------------------------
-import os
-from pathlib import Path
-
 DATA_DIR_ENV = os.getenv("DATA_DIR")
 GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
 GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -416,6 +448,79 @@ def load_base() -> pd.DataFrame:
 def save_base(df: pd.DataFrame):
     df.to_csv(BASE_PATH, index=False, encoding="utf-8")
 
+
+def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
+    cat_df = load_catalog()
+    mix_df = load_mixers()
+    nombre_to_id = dict(zip(cat_df["nombre"], cat_df["id"]))
+    mixer_cap_map = dict(zip(mix_df["mixer_id"], mix_df["capacidad_kg"]))
+
+    df = df.copy()
+    df["cod_racion"] = df.apply(lambda r: nombre_to_id.get(str(r.get("nombre_racion", "")), ""), axis=1)
+    df["capacidad_kg"] = df.apply(lambda r: mixer_cap_map.get(str(r.get("mixer_id", "")), 0), axis=1)
+
+    def kg_turno_calc(r):
+        try:
+            return round(
+                (
+                    float(r["PV_kg"]) * (float(r["CV_pct"]) / 100.0) * float(r["nro_cab"])
+                )
+                / max(float(r["turnos"]), 1.0),
+                1,
+            )
+        except Exception:
+            return 0.0
+
+    df["kg_turno_calc"] = df.apply(kg_turno_calc, axis=1)
+    df["kg_turno"] = df["kg_turno_calc"]
+
+    recipes = load_recipes()
+    alimentos = load_alimentos()[["ORIGEN", "MS"]]
+    ms_map: dict[str, float] = {}
+    for nombre in df["nombre_racion"].dropna().unique():
+        sub = recipes[recipes["nombre_racion"] == nombre]
+        if not sub.empty:
+            sub = sub.merge(alimentos, left_on="ingrediente", right_on="ORIGEN", how="left")
+            sub["MS_frac"] = pd.to_numeric(sub["MS"], errors="coerce").fillna(100.0) / 100.0
+            w = (
+                pd.to_numeric(sub["pct_ms"], errors="coerce").fillna(0.0) / 100.0 * sub["MS_frac"]
+            ).sum()
+            ms_map[nombre] = float(w) if w > 0 else 1.0
+
+    def kg_turno_asfed(r):
+        try:
+            ms = ms_map.get(str(r["nombre_racion"]), 1.0)
+            base = float(r["kg_turno"])
+            return round(base / max(ms, 1e-6), 1)
+        except Exception:
+            return 0.0
+
+    df["kg_turno_asfed_calc"] = df.apply(kg_turno_asfed, axis=1)
+
+    def dias_term(r):
+        try:
+            delta = float(r["meta_salida"]) - float(r["PV_kg"])
+            ap = max(float(r["AP_obt"]), 0.0001)
+            d = max(delta / ap, 0.0)
+            return int(round(d))
+        except Exception:
+            return 0
+
+    df["dias_TERM"] = df.apply(dias_term, axis=1)
+    df["semanas_TERM"] = (df["dias_TERM"] / 7.0).round(1)
+
+    def efc(r):
+        try:
+            hd = max(float(r["nro_cab"]), 1.0)
+            kg_dia_hd = (float(r["kg_turno_asfed_calc"]) * float(r["turnos"])) / hd
+            ap = max(float(r["AP_obt"]), 0.0001)
+            return round(kg_dia_hd / ap, 2)
+        except Exception:
+            return 0.0
+
+    df["EFC_conv"] = df.apply(efc, axis=1)
+    return df
+
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
@@ -479,74 +584,19 @@ with tab_corrales:
             "meta_salida": st.column_config.NumberColumn("META DE SALIDA (kg)", min_value=0, max_value=2000, step=5),
         }
 
-        def enrich_and_calc(df: pd.DataFrame) -> pd.DataFrame:
-            df = df.copy()
-            df["cod_racion"] = df.apply(lambda r: nombre_to_id.get(str(r.get("nombre_racion","")), ""), axis=1)
-            df["capacidad_kg"] = df.apply(lambda r: mixer_cap_map.get(str(r.get("mixer_id","")), 0), axis=1)
-
-            def kg_turno_calc(r):
-                try:
-                    return round((float(r["PV_kg"])*(float(r["CV_pct"])/100.0)*float(r["nro_cab"])) / max(float(r["turnos"]),1.0), 1)
-                except:
-                    return 0.0
-            df["kg_turno_calc"] = df.apply(kg_turno_calc, axis=1)
-            df["kg_turno"] = df["kg_turno_calc"]
-
-            recipes = load_recipes()
-            alimentos = load_alimentos()[["ORIGEN","MS"]]
-            ms_map = {}
-            for nombre in df["nombre_racion"].dropna().unique():
-                sub = recipes[recipes["nombre_racion"] == nombre]
-                if not sub.empty:
-                    sub = sub.merge(alimentos, left_on="ingrediente", right_on="ORIGEN", how="left")
-                    sub["MS_frac"] = pd.to_numeric(sub["MS"], errors="coerce").fillna(100.0)/100.0
-                    w = (pd.to_numeric(sub["pct_ms"], errors="coerce").fillna(0.0)/100.0 * sub["MS_frac"]).sum()
-                    ms_map[nombre] = float(w) if w>0 else 1.0
-
-            def kg_turno_asfed(r):
-                try:
-                    ms = ms_map.get(str(r["nombre_racion"]), 1.0)
-                    base = float(r["kg_turno"])
-                    return round(base / max(ms, 1e-6), 1)
-                except:
-                    return 0.0
-            df["kg_turno_asfed_calc"] = df.apply(kg_turno_asfed, axis=1)
-
-            def dias_term(r):
-                try:
-                    delta = float(r["meta_salida"]) - float(r["PV_kg"])
-                    ap = max(float(r["AP_obt"]), 0.0001)
-                    d = max(delta / ap, 0.0)
-                    return int(round(d))
-                except:
-                    return 0
-            df["dias_TERM"] = df.apply(dias_term, axis=1)
-            df["semanas_TERM"] = (df["dias_TERM"] / 7.0).round(1)
-
-            def efc(r):
-                try:
-                    hd = max(float(r["nro_cab"]), 1.0)
-                    kg_dia_hd = (float(r["kg_turno_asfed_calc"]) * float(r["turnos"])) / hd
-                    ap = max(float(r["AP_obt"]), 0.0001)
-                    return round(kg_dia_hd / ap, 2)
-                except:
-                    return 0.0
-            df["EFC_conv"] = df.apply(efc, axis=1)
-            return df
-
         editable_cols = [
             "tipo_racion","nro_corral","nombre_racion","categ","PV_kg","CV_pct",
             "AP_preten","nro_cab","mixer_id","capacidad_kg","AP_obt","turnos","meta_salida",
         ]
 
         with st.form("form_base"):
-            enriched = enrich_and_calc(base)
+            enriched = enrich_and_calc_base(base)
             grid = st.data_editor(
                 enriched[editable_cols],
                 column_config=colcfg,
                 column_order=editable_cols,
                 num_rows="dynamic",
-                width='stretch',
+                use_container_width=True,
                 hide_index=True,
                 key="grid_corrales",
             )
@@ -558,16 +608,16 @@ with tab_corrales:
                 for col in editable_cols:
                     if col in grid.columns:
                         out[col] = grid[col]
-                out = enrich_and_calc(out)
+                out = enrich_and_calc_base(out)
                 for col in ["kg_turno_calc","kg_turno_asfed_calc"]:
                     if col in out.columns:
                         out = out.drop(columns=[col])
                 save_base(out)
                 st.success("Base guardada.")
                 st.toast("Base actualizada.", icon="📦")
-                st.experimental_rerun()
+                rerun_with_cache_reset()
             if refresh:
-                st.experimental_rerun()
+                rerun_with_cache_reset()
 
 # ------------------------------------------------------------------------------
 # 📦 Alimentos
@@ -589,7 +639,11 @@ with tab_alimentos:
             if tipo.strip(): view = view[view["TIPO"].str.contains(tipo, case=False, na=False)]
             if ms_min>0: view = view[pd.to_numeric(view["MS"], errors="coerce").fillna(0)>=ms_min]
         grid_alim = st.data_editor(
-            view, num_rows="dynamic", width='stretch', hide_index=True, key="grid_alimentos",
+            view,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="grid_alimentos",
             column_config={
                 "ORIGEN": st.column_config.TextColumn("Origen", help="Nombre único del alimento (clave)."),
                 "PRESENTACION": st.column_config.TextColumn("Presentación"),
@@ -605,9 +659,28 @@ with tab_alimentos:
             },
         )
 
+        st.write("**Estado del catálogo:**")
+        ms_vals = pd.to_numeric(grid_alim.get("MS", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        cero_ms = int((ms_vals <= 0).sum())
+        chip("MS > 0 en todos", cero_ms == 0)
+        chip(f"Alimentos listados: {len(grid_alim)}", len(grid_alim) > 0)
+        if cero_ms > 0:
+            st.warning(f"Hay {cero_ms} alimentos con MS=0. Revisá esos valores antes de usarlos en recetas.")
+
         if col_save.button("💾 Guardar cambios del catálogo", type="primary"):
-            # guardamos sobre DF completo, no sólo vista filtrada:
-            save_alimentos(alimentos_df)
+            edited = grid_alim.copy()
+            edited = _normalize_columns(edited)
+
+            base = _normalize_columns(alimentos_df.copy())
+            base_idx = base.set_index("ORIGEN")
+            edited_idx = edited.set_index("ORIGEN")
+
+            base_idx.update(edited_idx)
+            new_rows = edited_idx.index.difference(base_idx.index)
+            base_idx = pd.concat([base_idx, edited_idx.loc[new_rows]], axis=0)
+
+            out = base_idx.reset_index()
+            save_alimentos(out)
             st.success("Catálogo guardado.")
             st.toast("Alimentos actualizados.", icon="🧾")
             rerun_with_cache_reset()
@@ -627,58 +700,7 @@ with tab_mixer:
         elif mixers_df.empty or mixers_df["mixer_id"].dropna().empty:
             st.warning("Definí mixers en la pestaña ⚙️ Parámetros para poder planificar la descarga.")
         else:
-            # Reusar enrich_and_calc de arriba:
-            # (lo definimos localmente de nuevo por simplicidad)
-            cat_df = load_catalog()
-            mix_df = load_mixers()
-            nombre_to_id = dict(zip(cat_df["nombre"], cat_df["id"]))
-            mixer_cap_map = dict(zip(mix_df["mixer_id"], mix_df["capacidad_kg"]))
-
-            def enrich_and_calc(df: pd.DataFrame) -> pd.DataFrame:
-                df = df.copy()
-                df["cod_racion"] = df.apply(lambda r: nombre_to_id.get(str(r.get("nombre_racion","")), ""), axis=1)
-                df["capacidad_kg"] = df.apply(lambda r: mixer_cap_map.get(str(r.get("mixer_id","")), 0), axis=1)
-
-                def kg_turno_calc(r):
-                    try:
-                        return round((float(r["PV_kg"])*(float(r["CV_pct"])/100.0)*float(r["nro_cab"])) / max(float(r["turnos"]),1.0), 1)
-                    except:
-                        return 0.0
-                df["kg_turno_calc"] = df.apply(kg_turno_calc, axis=1)
-                df["kg_turno"] = df["kg_turno_calc"]
-
-                recipes = load_recipes()
-                alimentos = load_alimentos()[["ORIGEN","MS"]]
-                ms_map = {}
-                for nombre in df["nombre_racion"].dropna().unique():
-                    sub = recipes[recipes["nombre_racion"] == nombre]
-                    if not sub.empty:
-                        sub = sub.merge(alimentos, left_on="ingrediente", right_on="ORIGEN", how="left")
-                        sub["MS_frac"] = pd.to_numeric(sub["MS"], errors="coerce").fillna(100.0)/100.0
-                        w = (pd.to_numeric(sub["pct_ms"], errors="coerce").fillna(0.0)/100.0 * sub["MS_frac"]).sum()
-                        ms_map[nombre] = float(w) if w>0 else 1.0
-
-                def kg_turno_asfed(r):
-                    try:
-                        ms = ms_map.get(str(r["nombre_racion"]), 1.0)
-                        base = float(r["kg_turno"])
-                        return round(base / max(ms, 1e-6), 1)
-                    except:
-                        return 0.0
-                df["kg_turno_asfed_calc"] = df.apply(kg_turno_asfed, axis=1)
-
-                def efc(r):
-                    try:
-                        hd = max(float(r["nro_cab"]), 1.0)
-                        kg_dia_hd = (float(r["kg_turno_asfed_calc"]) * float(r["turnos"])) / hd
-                        ap = max(float(r["AP_obt"]), 0.0001)
-                        return round(kg_dia_hd / ap, 2)
-                    except:
-                        return 0.0
-                df["EFC_conv"] = df.apply(efc, axis=1)
-                return df
-
-            base_calc = enrich_and_calc(base_df)
+            base_calc = enrich_and_calc_base(base_df)
             tipos_racion = [t for t in base_calc["tipo_racion"].dropna().astype(str).unique() if t.strip()]
             if tipos_racion:
                 mixer_options = mixers_df["mixer_id"].dropna().astype(str).tolist()
@@ -780,7 +802,7 @@ with tab_mixer:
                             "novillos": int(corrales_df["novillos"].sum()),
                         }
                         corrales_df = pd.concat([corrales_df, pd.DataFrame([resumen])], ignore_index=True)
-                        st.dataframe(corrales_df, width='stretch', hide_index=True)
+                        st.dataframe(corrales_df, use_container_width=True, hide_index=True)
 
                         st.download_button(
                             f"⬇️ Exportar plan (Descarga {slot})",
@@ -819,7 +841,7 @@ with tab_mixer:
                 plan = mixer_kg_by_ingredient(ings, total_kg)
                 if plan:
                     df_plan = pd.DataFrame({"Ingrediente": list(plan.keys()), "Kg (as-fed)": list(plan.values())})
-                    st.dataframe(df_plan, width='stretch')
+                    st.dataframe(df_plan, use_container_width=True)
                     st.caption(f"Total calculado: {sum(plan.values()):.1f} kg (debería ≈ {total_kg:.1f} kg)")
                     st.toast("Plan de carga generado.", icon="✅")
                 else:
@@ -829,37 +851,45 @@ with tab_mixer:
 # ⬇️ Exportar
 # ------------------------------------------------------------------------------
 with tab_export:
-    with card("⬇️ Exportar datos y simulaciones", "Descargá todas las bases en un ZIP"):
+    with card(
+        "⬇️ Exportar datos y simulaciones",
+        "Descargá todas las bases en un ZIP (ámbito de tu usuario)",
+    ):
         names = [
-            "alimentos.csv", "raciones_base.csv", "mixers.csv", "pesos.csv",
-            "raciones_catalog.csv", "raciones_recipes.csv",
-            "requerimientos_energeticos.csv", "requerimiento_proteico.csv",
+            "alimentos.csv",
+            "raciones_base.csv",
+            "mixers.csv",
+            "pesos.csv",
+            "raciones_catalog.csv",
+            "raciones_recipes.csv",
+            "requerimientos_energeticos.csv",
+            "requerimiento_proteico.csv",
         ]
-        files_to_zip = [DATA_DIR / fname for fname in names if (DATA_DIR / fname).exists()]
+        files_to_zip = [USER_DIR / fname for fname in names if (USER_DIR / fname).exists()]
+
         if files_to_zip:
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for f in files_to_zip: zf.write(f, arcname=f.name)
+                manifest = {
+                    "user": username,
+                    "exported_at": datetime.now().isoformat(timespec="seconds"),
+                    "files": [f.name for f in files_to_zip],
+                }
+                zf.writestr("manifest.json", pd.Series(manifest).to_json())
+
+                for f in files_to_zip:
+                    zf.write(f, arcname=f.name)
             buffer.seek(0)
             ts = datetime.now().strftime("%Y%m%d-%H%M")
-            st.download_button("⬇️ Descargar ZIP (todas las bases)", data=buffer,
-                               file_name=f"simulaciones_{ts}.zip", mime="application/zip", type="primary")
+            st.download_button(
+                "⬇️ Descargar ZIP (todas las bases)",
+                data=buffer,
+                file_name=f"simulaciones_{username}_{ts}.zip",
+                mime="application/zip",
+                type="primary",
+            )
         else:
-            st.info("No se encontraron archivos en /data para exportar.")
-files_to_zip = [
-    user_path(fname)
-    for fname in (
-        "alimentos.csv",
-        "raciones_base.csv",
-        "mixers.csv",
-        "pesos.csv",
-        "raciones_catalog.csv",
-        "raciones_recipes.csv",
-        "requerimientos_energeticos.csv",
-        "requerimiento_proteico.csv",
-    )
-    if user_path(fname).exists()
-]
+            st.info("No se encontraron archivos en tu carpeta de usuario para exportar.")
 
 # ------------------------------------------------------------------------------
 # ⚙️ Parámetros
@@ -877,11 +907,17 @@ with tab_parametros:
             {"Archivo": "requerimiento_proteico.csv", "Descripción": "Requerimientos proteicos"},
         ])
         st.markdown("### Tablas de configuración disponibles")
-        st.dataframe(config_summary, hide_index=True, width='stretch')
+        st.dataframe(config_summary, hide_index=True, use_container_width=True)
 
         st.markdown("### Catálogo de alimentos")
         alim_df = load_alimentos()
-        grid_alim_p = st.data_editor(alim_df, num_rows="dynamic", width='stretch', hide_index=True, key="param_alimentos")
+        grid_alim_p = st.data_editor(
+            alim_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="param_alimentos",
+        )
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar alimentos (parámetros)", type="primary"):
             save_alimentos(grid_alim_p); st.success("Alimentos guardados."); st.toast("Alimentos actualizados.", icon="🧾"); rerun_with_cache_reset()
@@ -895,7 +931,10 @@ with tab_parametros:
                 "mixer_id": st.column_config.TextColumn("Mixer ID"),
                 "capacidad_kg": st.column_config.NumberColumn("Capacidad (kg)", min_value=0, step=10)
             },
-            num_rows="dynamic", width='stretch', hide_index=True, key="param_mixers"
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="param_mixers",
         )
         if c2.button("💾 Guardar mixers", type="primary"):
             save_mixers(grid_mix); st.success("Mixers guardados."); st.toast("Mixers actualizados.", icon="🛠"); rerun_with_cache_reset()
@@ -906,7 +945,10 @@ with tab_parametros:
         grid_pes = st.data_editor(
             pesos_df,
             column_config={"peso_kg": st.column_config.NumberColumn("PV (kg)", min_value=1.0, max_value=2000.0, step=0.5)},
-            num_rows="dynamic", width='stretch', hide_index=True, key="param_pesos"
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="param_pesos",
         )
         p1, p2 = st.columns(2)
         if p1.button("💾 Guardar PV (kg)", type="primary"):
@@ -923,7 +965,10 @@ with tab_parametros:
                 "requerimiento_energetico": st.column_config.NumberColumn("Req. energético (Mcal EM/día)", min_value=0.0, max_value=50.0, step=0.1),
                 "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=10.0, step=0.1),
             },
-            num_rows="dynamic", width='stretch', hide_index=True, key="param_reqener"
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="param_reqener",
         )
         r1, r2 = st.columns(2)
         if r1.button("💾 Guardar requerimientos energéticos", type="primary"):
@@ -942,7 +987,10 @@ with tab_parametros:
                 "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=20.0, step=0.1),
                 "req_proteico": st.column_config.NumberColumn("Req. proteico (g PB/día)", min_value=0.0, max_value=5000.0, step=1.0),
             },
-            num_rows="dynamic", width='stretch', hide_index=True, key="param_reqprot"
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="param_reqprot",
         )
         rp1, rp2 = st.columns(2)
         if rp1.button("💾 Guardar requerimientos proteicos", type="primary"):
@@ -958,7 +1006,8 @@ with tab_raciones:
         cat = load_catalog()
         rec = load_recipes()
         alimentos_df = load_alimentos()
-        opciones_ingred = [""] + sorted(alimentos_df["ORIGEN"].dropna().astype(str).unique().tolist())
+        alimentos_norm = _normalize_columns(alimentos_df.copy())
+        opciones_ingred = [""] + sorted(alimentos_norm["ORIGEN"].dropna().astype(str).unique().tolist())
 
         st.markdown("### Catálogo de raciones")
         cat_display = cat.copy()
@@ -981,7 +1030,10 @@ with tab_raciones:
                 "corral_comparacion": st.column_config.NumberColumn("Corral de comparación", min_value=0.0, max_value=1000.0, step=1.0),
             },
             column_order=editable_cat_cols,
-            num_rows="dynamic", width='stretch', hide_index=False, key="grid_rac_catalog",
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=False,
+            key="grid_rac_catalog",
         )
         cat_updated = cat_display.copy()
         for col in editable_cat_cols:
@@ -996,7 +1048,7 @@ with tab_raciones:
         st.dataframe(
             cat_preview[[c for c in ["id","nombre","cv_ms_kg"] if c in cat_preview.columns]],
             hide_index=True,
-            width='stretch'
+            use_container_width=True,
         )
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar catálogo", type="primary"):
@@ -1040,7 +1092,7 @@ with tab_raciones:
                 rec_r[rec_edit_cols],
                 column_config=colcfg,
                 column_order=rec_edit_cols,
-                width='stretch',
+                use_container_width=True,
                 hide_index=True,
                 num_rows=6,
                 key="grid_rac_recipe",
@@ -1049,10 +1101,30 @@ with tab_raciones:
             total_pct = float(pd.to_numeric(grid_rec["pct_ms"], errors="coerce").fillna(0.0).sum())
             st.progress(min(int(total_pct), 100), text=f"Suma MS: {total_pct:.1f}%")
             ok100 = abs(total_pct-100) <= 0.5
-            st.write("**Estado:**")
-            chip("100% MS", ok=True) if ok100 else chip("Fuera de 100% ±0,5", ok=False)
+            ingredientes_clean = grid_rec["ingrediente"].astype(str).str.strip()
+            ingredientes_nonempty = ingredientes_clean[ingredientes_clean != ""]
+            duplicados = ingredientes_nonempty.str.lower().duplicated().any()
+            lookup_ms = alimentos_norm.copy()
+            lookup_ms["ORIGEN"] = lookup_ms["ORIGEN"].str.strip().str.lower()
+            ms_series = lookup_ms.set_index("ORIGEN")["MS"] if not lookup_ms.empty else pd.Series(dtype=float)
+            ms_missing = False
+            if not ingredientes_nonempty.empty:
+                ms_vals = ingredientes_nonempty.str.lower().map(ms_series)
+                ms_missing = ms_vals.isna().any()
 
-            if st.button("💾 Guardar receta de esta ración", type="primary", disabled=not ok100):
+            st.write("**Estado:**")
+            chip("Suma 100% ±0,5", ok100)
+            chip("Ingredientes únicos", not duplicados)
+            chip("MS disponible", not ms_missing)
+
+            if duplicados:
+                st.warning("Hay ingredientes duplicados en la receta.")
+            if ms_missing:
+                st.warning("Al menos un ingrediente no tiene MS cargada en el catálogo de alimentos.")
+
+            can_save = ok100 and not duplicados and not ms_missing
+
+            if st.button("💾 Guardar receta de esta ración", type="primary", disabled=not can_save):
                 out = grid_rec.copy()
                 out["id_racion"] = rid; out["nombre_racion"] = pick
                 out = out[out["ingrediente"].astype(str).str.strip()!=""]
@@ -1067,13 +1139,20 @@ with tab_raciones:
             df_view = grid_rec.copy()
             df_view = df_view[df_view["ingrediente"].astype(str).str.strip()!=""]
             if not df_view.empty:
-                df_view = df_view.merge(alimentos_df[["ORIGEN","MS"]], left_on="ingrediente", right_on="ORIGEN", how="left")
+                df_view = df_view.merge(
+                    alimentos_norm[["ORIGEN","MS"]],
+                    left_on="ingrediente",
+                    right_on="ORIGEN",
+                    how="left",
+                )
                 df_view = df_view.rename(columns={"MS":"MS_%"}).drop(columns=["ORIGEN"])
                 df_view["MS_frac"] = pd.to_numeric(df_view["MS_%"], errors="coerce").fillna(100.0)/100.0
                 w_ms = (df_view["pct_ms"]/100.0 * df_view["MS_frac"]).sum()
                 w_ms = float(w_ms) if w_ms>0 else 1.0
                 factor_asfed = 1.0 / w_ms
-                st.write(f"**MS ponderada:** {w_ms*100:.1f}%  →  **Factor as-fed:** ×{factor_asfed:.3f}")
-                st.dataframe(df_view[["ingrediente","pct_ms","MS_%"]], width='stretch')
+                m1, m2 = st.columns(2)
+                m1.metric("MS ponderada", f"{w_ms*100:.1f} %")
+                m2.metric("Factor as-fed", f"×{factor_asfed:.3f}")
+                st.dataframe(df_view[["ingrediente","pct_ms","MS_%"]], use_container_width=True)
             else:
                 st.info("Agregá ingredientes para ver la MS ponderada.")
