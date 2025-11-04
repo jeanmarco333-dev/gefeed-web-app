@@ -30,7 +30,7 @@ authenticator = stauth.Authenticate(
     CFG["cookie"]["expiry_days"],
 )
 
-name, auth_status, username = authenticator.login("Iniciar sesión", "main")
+name, auth_status, username = authenticator.login(location="main")
 if auth_status is False:
     st.error("Usuario o contraseña inválidos"); st.stop()
 elif auth_status is None:
