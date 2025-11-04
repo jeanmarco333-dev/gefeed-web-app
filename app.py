@@ -17,7 +17,27 @@ import pandas as pd
 import streamlit as st
 
 from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
+# --- AUTH (login por usuario/clave) ---
+import yaml
+import streamlit_authenticator as stauth
+from pathlib import Path
 
+CFG = yaml.safe_load(Path("config_users.yaml").read_text(encoding="utf-8"))
+authenticator = stauth.Authenticate(
+    CFG["credentials"],
+    CFG["cookie"]["name"],
+    CFG["cookie"]["key"],
+    CFG["cookie"]["expiry_days"],
+)
+
+name, auth_status, username = authenticator.login("Iniciar sesión", "main")
+if auth_status is False:
+    st.error("Usuario o contraseña inválidos"); st.stop()
+elif auth_status is None:
+    st.info("Ingresá tus credenciales"); st.stop()
+
+st.sidebar.write(f"👤 {name} (@{username})")
+authenticator.logout("Salir", "sidebar")
 # ------------------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------------------
