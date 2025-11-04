@@ -17,6 +17,27 @@ import pandas as pd
 import streamlit as st
 
 from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
+# --- AUTH (login por usuario/clave) ---
+import yaml
+import streamlit_authenticator as stauth
+from pathlib import Path
+
+CFG = yaml.safe_load(Path("config_users.yaml").read_text(encoding="utf-8"))
+authenticator = stauth.Authenticate(
+    CFG["credentials"],
+    CFG["cookie"]["name"],
+    CFG["cookie"]["key"],
+    CFG["cookie"]["expiry_days"],
+)
+
+name, auth_status, username = authenticator.login("Iniciar sesión", location="main")
+if auth_status is False:
+    st.error("Usuario o contraseña inválidos"); st.stop()
+elif auth_status is None:
+    st.info("Ingresá tus credenciales"); st.stop()
+
+st.sidebar.write(f"👤 {name} (@{username})")
+authenticator.logout("Salir", "sidebar")
 
 # ------------------------------------------------------------------------------
 # Config
@@ -74,24 +95,33 @@ def chip(text: str, ok: bool=True):
     st.markdown(f'<span class="{klass}">{text}</span>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# Paths
+# Paths (multiusuario)
 # ------------------------------------------------------------------------------
+import os
+from pathlib import Path
+
 DATA_DIR_ENV = os.getenv("DATA_DIR")
-DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
+GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-ALIM_PATH = DATA_DIR / "alimentos.csv"
-BASE_PATH = DATA_DIR / "raciones_base.csv"
-MIXERS_PATH = DATA_DIR / "mixers.csv"
-PESOS_PATH = DATA_DIR / "pesos.csv"
-CATALOG_PATH = DATA_DIR / "raciones_catalog.csv"
-RECIPES_PATH = DATA_DIR / "raciones_recipes.csv"
-REQENER_PATH = DATA_DIR / "requerimientos_energeticos.csv"
-REQPROT_PATH = DATA_DIR / "requerimiento_proteico.csv"
+# Carpeta sandbox del usuario autenticado
+USER_DIR = GLOBAL_DATA_DIR / "users" / username
+USER_DIR.mkdir(parents=True, exist_ok=True)
 
-ALIM_COLS = ["ORIGEN","PRESENTACION","TIPO","MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]
-REQENER_COLS = ["peso","cat","requerimiento_energetico","ap"]
-REQPROT_COLS = ["peso","cat","ap","req_proteico"]
+def user_path(fname: str) -> Path:
+    p = USER_DIR / fname
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+ALIM_PATH    = user_path("alimentos.csv")
+BASE_PATH    = user_path("raciones_base.csv")
+MIXERS_PATH  = user_path("mixers.csv")
+PESOS_PATH   = user_path("pesos.csv")
+CATALOG_PATH = user_path("raciones_catalog.csv")
+RECIPES_PATH = user_path("raciones_recipes.csv")
+REQENER_PATH = user_path("requerimientos_energeticos.csv")
+REQPROT_PATH = user_path("requerimiento_proteico.csv")
+
 
 # Crear archivos mínimos si faltan
 if not ALIM_PATH.exists():
@@ -774,6 +804,20 @@ with tab_export:
                                file_name=f"simulaciones_{ts}.zip", mime="application/zip", type="primary")
         else:
             st.info("No se encontraron archivos en /data para exportar.")
+files_to_zip = [
+    user_path(fname)
+    for fname in (
+        "alimentos.csv",
+        "raciones_base.csv",
+        "mixers.csv",
+        "pesos.csv",
+        "raciones_catalog.csv",
+        "raciones_recipes.csv",
+        "requerimientos_energeticos.csv",
+        "requerimiento_proteico.csv",
+    )
+    if user_path(fname).exists()
+]
 
 # ------------------------------------------------------------------------------
 # ⚙️ Parámetros

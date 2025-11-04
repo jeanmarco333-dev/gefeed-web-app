@@ -1,0 +1,18 @@
+credentials:
+  usernames:
+    juan:
+      email: juan@example.com
+      name: Juan Pérez
+      password: '$2b$12$eImiTXuWVxfM37uY4JANjQ=='
+    ana:
+      email: ana@example.com
+      name: Ana Gómez
+      password: '$2b$12$X0W5.JFge3iG3Q9eFzq3Hu=='
+
+cookie:
+  expiry_days: 30
+  key: 'some_signature_key'
+  name: 'gefeed_cookie'
+
+preauthorized:
+  emails: []
