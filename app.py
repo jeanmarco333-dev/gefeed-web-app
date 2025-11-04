@@ -933,7 +933,7 @@ with tab_raciones:
             total_pct = float(pd.to_numeric(grid_rec["pct_ms"], errors="coerce").fillna(0.0).sum())
             st.progress(min(int(total_pct), 100), text=f"Suma MS: {total_pct:.1f}%")
             ok100 = abs(total_pct-100) <= 0.5
-            st.write("Estado: ", end="")
+            st.write("**Estado:**")
             chip("100% MS", ok=True) if ok100 else chip("Fuera de 100% ±0,5", ok=False)
 
             if st.button("💾 Guardar receta de esta ración", type="primary", disabled=not ok100):
