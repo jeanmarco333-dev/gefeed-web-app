@@ -20,7 +20,11 @@ from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
 # --- AUTH (login por usuario/clave) ---
 import yaml
 import streamlit_authenticator as stauth
-from pathlib import Path
+
+# ------------------------------------------------------------------------------
+# Configuración global (debe ir antes de cualquier llamada a Streamlit)
+# ------------------------------------------------------------------------------
+st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 
 CFG = yaml.safe_load(Path("config_users.yaml").read_text(encoding="utf-8"))
 authenticator = stauth.Authenticate(
@@ -38,10 +42,6 @@ elif auth_status is None:
 
 st.sidebar.write(f"👤 {name} (@{username})")
 authenticator.logout("Salir", "sidebar")
-# ------------------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------------------
-st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 st.title("JM P-Feedlot v0.26 — Web")
 st.caption("Stock corrales • Ajustes de raciones • Alimentos • Mixer • Parámetros • Export ZIP")
 
