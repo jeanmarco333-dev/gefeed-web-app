@@ -309,46 +309,76 @@ def build_raciones_from_recipes() -> list:
     rec = load_recipes()
     if cat.empty or rec.empty:
         return []
+
     alimentos = load_alimentos()
     if alimentos.empty:
         return []
+
+    # --- lookup: ORIGEN (lower) -> dict (no Series)
     lookup = {}
-for _, row in alimentos.iterrows():
-    nombre = str(row.get("ORIGEN", "")).strip()
-    if not nombre:
-        continue
-    lookup[nombre.lower()] = row.to_dict()  # <-- dict, no Series
+    for _, row in alimentos.iterrows():
+        nombre = str(row.get("ORIGEN", "")).strip()
+        if not nombre:
+            continue
+        lookup[nombre.lower()] = row.to_dict()
 
-...
+    def _num(value, default=0.0):
+        try:
+            val = float(pd.to_numeric(value, errors="coerce"))
+        except Exception:
+            return default
+        return default if pd.isna(val) else val
 
-for _, ing in receta.iterrows():
-    ing_name = _text(ing.get("ingrediente", "")).strip()
-    if not ing_name:
-        continue
+    def _text(value):
+        if pd.isna(value):
+            return ""
+        return str(value)
 
-    ref = lookup.get(ing_name.lower())
-    if ref is None:
-        ref = {}  # <-- sin 'or {}' para evitar ambigüedad
+    raciones = []
+    for _, row in cat.iterrows():
+        rid = int(row.get("id", 0))
+        nombre = _text(row.get("nombre", "")).strip() or f"Ración {rid}"
+        receta = rec[rec["id_racion"] == rid]
+        if receta.empty:
+            continue
 
-    ingredientes.append({
-        "ORIGEN": ing_name,
-        "PRESENTACION": _text(ref.get("PRESENTACION", "")),
-        "TIPO": _text(ref.get("TIPO", "")),
-        "MS": _num(ref.get("MS", 100.0), 100.0),
-        "TND (%)": _num(ref.get("TND (%)", 0.0), 0.0),
-        "PB": _num(ref.get("PB", 0.0), 0.0),
-        "EE": _num(ref.get("EE", 0.0), 0.0),
-        "COEF ATC": _num(ref.get("COEF ATC", 0.0), 0.0),
-        "$/KG": _num(ref.get("$/KG", 0.0), 0.0),  # <-- usa la clave normalizada
-        "EM": _num(ref.get("EM", 0.0), 0.0),
-        "ENP2": _num(ref.get("ENP2", 0.0), 0.0),
-        "inclusion_pct": _num(ing.get("pct_ms", 0.0), 0.0),
-    })
-        ingredientes = [i for i in ingredientes if i["inclusion_pct"] > 0]
-        if not ingredientes: continue
-        raciones.append({"id": rid, "nombre": nombre, "ingredientes": ingredientes})
+        ingredientes = []
+        for _, ing in receta.iterrows():
+            ing_name = _text(ing.get("ingrediente", "")).strip()
+            if not ing_name:
+                continue
+
+            ref = lookup.get(ing_name.lower())
+            if ref is None:
+                ref = {}
+
+            ingredientes.append({
+                "ORIGEN": ing_name,
+                "PRESENTACION": _text(ref.get("PRESENTACION", "")),
+                "TIPO": _text(ref.get("TIPO", "")),
+                "MS": _num(ref.get("MS", 100.0), 100.0),
+                "TND (%)": _num(ref.get("TND (%)", 0.0), 0.0),
+                "PB": _num(ref.get("PB", 0.0), 0.0),
+                "EE": _num(ref.get("EE", 0.0), 0.0),
+                "COEF ATC": _num(ref.get("COEF ATC", 0.0), 0.0),
+                "$/KG": _num(ref.get("$/KG", 0.0), 0.0),
+                "EM": _num(ref.get("EM", 0.0), 0.0),
+                "ENP2": _num(ref.get("ENP2", 0.0), 0.0),
+                "inclusion_pct": _num(ing.get("pct_ms", 0.0), 0.0),
+            })
+
+        # Filtro de inclusiones > 0 (correctamente indentado)
+        ingredientes = [i for i in ingredientes if i["inclusion_pct"] > 0.0]
+        if not ingredientes:
+            continue
+
+        raciones.append({
+            "id": rid,
+            "nombre": nombre,
+            "ingredientes": ingredientes,
+        })
+
     return raciones
-
 @st.cache_data
 def load_base() -> pd.DataFrame:
     try: return pd.read_csv(BASE_PATH, encoding="utf-8-sig")
