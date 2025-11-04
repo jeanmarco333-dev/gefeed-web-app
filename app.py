@@ -1101,7 +1101,7 @@ with tab_admin:
     else:
         with card("👤 Administración de usuarios", "Crear, editar y cambiar contraseñas"):
             import re
-            from streamlit_authenticator import Hasher
+            import bcrypt
 
             def save_user_store(store_dict):
                 AUTH_STORE.write_text(
@@ -1169,7 +1169,7 @@ with tab_admin:
                 if pw or pw2:
                     if pw != pw2:
                         st.error("Las contraseñas no coinciden."); st.stop()
-                    hashed = Hasher([pw]).generate()[0]
+                    hashed = bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
                     entry["password"] = hashed
 
                 users[new_user] = entry
