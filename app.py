@@ -21,6 +21,20 @@ from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
 import yaml
 import streamlit_authenticator as stauth
 
+# ------------------------------------------------------------------------------
+# Paths (multiusuario)
+# ------------------------------------------------------------------------------
+DATA_DIR_ENV = os.getenv("DATA_DIR")
+GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
+GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- Config de ADMIN y almacenamiento de usuarios editables ---
+ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administración
+
+AUTH_DIR = GLOBAL_DATA_DIR / "auth"
+AUTH_DIR.mkdir(parents=True, exist_ok=True)
+AUTH_STORE = AUTH_DIR / "users.yaml"  # acá persistimos los usuarios editados por UI
+
 # --- Columnas base (constantes) ---
 ALIM_COLS = [
     "ORIGEN",
@@ -52,24 +66,81 @@ def _num(x, default=0.0):
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 
-CFG_PATH = Path("config_users.yaml")
-if not CFG_PATH.exists():
-    st.error("Falta archivo de configuración de usuarios: config_users.yaml")
-    st.stop()
+CFG_PATH = Path("config_users.yaml")  # opcional (dev local o repo privado)
 
-try:
-    CFG = yaml.safe_load(CFG_PATH.read_text(encoding="utf-8")) or {}
-    authenticator = stauth.Authenticate(
-        CFG.get("credentials", {}),
-        CFG.get("cookie", {}).get("name", "feedlot_cookie"),
-        CFG.get("cookie", {}).get("key", "feedlot_key"),
-        CFG.get("cookie", {}).get("expiry_days", 1),
-    )
-except Exception as e:
-    st.error(f"Error leyendo config_users.yaml: {e}")
-    st.stop()
 
-name, auth_status, username = authenticator.login(location="main")
+def load_base_cfg():
+    """Carga credenciales base: YAML en repo o st.secrets (solo lectura)."""
+    if CFG_PATH.exists():
+        try:
+            return yaml.safe_load(CFG_PATH.read_text(encoding="utf-8")) or {}
+        except Exception as e:
+            st.error(f"config_users.yaml inválido: {e}"); st.stop()
+    if "auth" in st.secrets:
+        return dict(st.secrets["auth"])
+    # Si no hay nada, creamos estructura mínima vacía (permitirá que el admin cree users desde cero)
+    return {
+        "credentials": {"usernames": {}},
+        "cookie": {"name": "gefeed_cookie", "key": "feedlot_key", "expiry_days": 7},
+        "preauthorized": {"emails": []},
+    }
+
+
+def load_user_store():
+    """Carga/crea el YAML editable de usuarios."""
+    if AUTH_STORE.exists():
+        try:
+            return yaml.safe_load(AUTH_STORE.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
+    # Si no existe, inicializamos con estructura mínima
+    return {"credentials": {"usernames": {}}, "preauthorized": {"emails": []}}
+
+
+def merge_credentials(base_cfg, store_cfg):
+    """El store (editable) pisa/añade usuarios sobre la config base (solo lectura)."""
+    out = dict(base_cfg)
+    base_users = (out.get("credentials") or {}).get("usernames", {}) or {}
+    store_users = (store_cfg.get("credentials") or {}).get("usernames", {}) or {}
+    merged_users = dict(base_users)
+    merged_users.update(store_users)  # lo editable tiene prioridad
+    out.setdefault("credentials", {})["usernames"] = merged_users
+    if store_cfg.get("cookie"):
+        cookie_base = dict(out.get("cookie") or {})
+        cookie_base.update(store_cfg["cookie"])
+        out["cookie"] = cookie_base
+    if store_cfg.get("preauthorized"):
+        preauth_base = dict(out.get("preauthorized") or {})
+        preauth_base.update(store_cfg["preauthorized"])
+        out["preauthorized"] = preauth_base
+    return out
+
+
+BASE_CFG = load_base_cfg()
+STORE_CFG = load_user_store()
+CFG = merge_credentials(BASE_CFG, STORE_CFG)
+
+cookie_cfg = CFG.get("cookie", {})
+authenticator = stauth.Authenticate(
+    credentials=CFG.get("credentials", {}),
+    cookie_name=cookie_cfg.get("name", "gefeed_cookie"),
+    key=cookie_cfg.get("key", "feedlot_key"),
+    cookie_expiry_days=cookie_cfg.get("expiry_days", 7),
+)
+
+# Manejo defensivo del retorno (tupla/dict/None)
+result = authenticator.login(location="main")
+if isinstance(result, tuple) and len(result) == 3:
+    name, auth_status, username = result
+elif isinstance(result, dict):
+    name = result.get("name")
+    auth_status = result.get("authentication_status")
+    username = result.get("username")
+elif result is None:
+    st.info("Ingresá tus credenciales"); st.stop()
+else:
+    st.error("Retorno inesperado de authenticator.login()"); st.stop()
+
 if auth_status is False:
     st.error("Usuario o contraseña inválidos"); st.stop()
 elif auth_status is None:
@@ -127,13 +198,6 @@ def dropdown(title: str, open: bool=False):
 def chip(text: str, ok: bool=True):
     klass = "chip-ok" if ok else "chip-bad"
     st.markdown(f'<span class="{klass}">{text}</span>', unsafe_allow_html=True)
-
-# ------------------------------------------------------------------------------
-# Paths (multiusuario)
-# ------------------------------------------------------------------------------
-DATA_DIR_ENV = os.getenv("DATA_DIR")
-GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
-GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Carpeta sandbox del usuario autenticado
 USER_DIR = GLOBAL_DATA_DIR / "users" / username
@@ -524,8 +588,16 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
-tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export = st.tabs(
-    ["📊 Stock & Corrales","🧾 Ajustes de raciones","📦 Alimentos","🧮 Mixer","⚙️ Parámetros","⬇️ Exportar"]
+tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_admin = st.tabs(
+    [
+        "📊 Stock & Corrales",
+        "🧾 Ajustes de raciones",
+        "📦 Alimentos",
+        "🧮 Mixer",
+        "⚙️ Parámetros",
+        "⬇️ Exportar",
+        "👤 Usuarios (Admin)",
+    ]
 )
 
 # ------------------------------------------------------------------------------
@@ -997,6 +1069,115 @@ with tab_parametros:
             save_reqprot(grid_reqprot); st.success("Requerimientos proteicos guardados."); st.toast("Req. PB actualizados.", icon="🧪"); rerun_with_cache_reset()
         if rp2.button("🔄 Recargar requerimientos proteicos"):
             rerun_with_cache_reset()
+
+# ------------------------------------------------------------------------------
+# 👤 Usuarios (Admin)
+# ------------------------------------------------------------------------------
+with tab_admin:
+    if username not in ADMIN_USERS:
+        st.warning("No tenés permisos para administrar usuarios.")
+    else:
+        with card("👤 Administración de usuarios", "Crear, editar y cambiar contraseñas"):
+            import re
+            from streamlit_authenticator import Hasher
+
+            def save_user_store(store_dict):
+                AUTH_STORE.write_text(
+                    yaml.safe_dump(store_dict, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8",
+                )
+                st.success("Cambios guardados.")
+                st.toast("Usuarios actualizados.", icon="✅")
+                st.rerun()
+
+            # Cargar estado actual del store
+            store = load_user_store()
+            users = (store.get("credentials") or {}).get("usernames", {}) or {}
+
+            st.markdown("### Usuarios existentes")
+            if users:
+                df_users = pd.DataFrame(
+                    [
+                        {"usuario": u, "nombre": v.get("name", ""), "email": v.get("email", "")}
+                        for u, v in sorted(users.items())
+                    ]
+                )
+                st.dataframe(df_users, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay usuarios en el store editable (data/auth/users.yaml).")
+
+            st.markdown("---")
+            st.markdown("### Agregar / Editar usuario")
+            col_u1, col_u2 = st.columns(2)
+            new_user = col_u1.text_input("Usuario", placeholder="ej: juan").strip()
+            new_name = col_u2.text_input("Nombre visible", placeholder="ej: Juan Pérez").strip()
+            new_email = st.text_input("Email", placeholder="juan@example.com").strip()
+
+            col_p1, col_p2 = st.columns(2)
+            pw = col_p1.text_input(
+                "Contraseña (dejar vacío para no cambiar si el usuario ya existe)",
+                type="password",
+            )
+            pw2 = col_p2.text_input("Repetir contraseña", type="password")
+
+            ccol1, ccol2, ccol3 = st.columns(3)
+            create_or_update = ccol1.button("💾 Crear / Actualizar", type="primary")
+            delete_btn = ccol2.button("🗑️ Eliminar usuario", type="secondary", disabled=(not new_user))
+            reset_cookie = ccol3.checkbox(
+                "Rotar cookie (forzar re-login)",
+                value=False,
+                help="Se incrementará el sufijo del nombre de cookie.",
+            )
+
+            if create_or_update:
+                if not new_user:
+                    st.error("Ingresá un nombre de usuario."); st.stop()
+                if not re.match(r"^[a-zA-Z0-9_.-]{3,}$", new_user):
+                    st.error("Usuario inválido (usa letras/números/._-, mínimo 3)."); st.stop()
+                if not new_name:
+                    st.error("Ingresá un nombre visible."); st.stop()
+                if new_email and "@" not in new_email:
+                    st.error("Email inválido."); st.stop()
+
+                entry = users.get(new_user, {}).copy()
+                entry["name"] = new_name
+                if new_email:
+                    entry["email"] = new_email
+
+                if pw or pw2:
+                    if pw != pw2:
+                        st.error("Las contraseñas no coinciden."); st.stop()
+                    hashed = Hasher([pw]).generate()[0]
+                    entry["password"] = hashed
+
+                users[new_user] = entry
+                store.setdefault("credentials", {})["usernames"] = users
+
+                if reset_cookie:
+                    base_cookie = CFG.get("cookie", {}).get("name", "gefeed_cookie")
+                    import re as _re
+
+                    m = _re.match(r"^(.*)_v(\d+)$", base_cookie)
+                    if m:
+                        base, n = m.group(1), int(m.group(2))
+                        new_cookie = f"{base}_v{n+1}"
+                    else:
+                        new_cookie = f"{base_cookie}_v2"
+                    store.setdefault("cookie", {})["name"] = new_cookie
+                    st.info(f"Cookie rotada a: {new_cookie}")
+
+                save_user_store(store)
+
+            if delete_btn:
+                if new_user in users:
+                    if new_user in ADMIN_USERS:
+                        st.error("No podés eliminar un usuario admin definido en ADMIN_USERS.")
+                    else:
+                        users.pop(new_user, None)
+                        store.setdefault("credentials", {})["usernames"] = users
+                        save_user_store(store)
+                else:
+                    st.warning("Ese usuario no existe en el store.")
 
 # ------------------------------------------------------------------------------
 # 🧾 Ajustes de raciones (catálogo + recetas)
