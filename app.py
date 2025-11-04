@@ -274,7 +274,7 @@ def load_catalog() -> pd.DataFrame:
     try:
         df = pd.read_csv(CATALOG_PATH, encoding="utf-8-sig")
     except:
-        return pd.DataFrame({"id":[], "nombre":[], "etapa":[]})
+        return pd.DataFrame({"id": [], "nombre": [], "etapa": []})
 
     # Normalizar encabezados (maneja archivos con mayúsculas/espacios)
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -286,10 +286,22 @@ def load_catalog() -> pd.DataFrame:
         df["nombre"] = pd.Series(dtype="object")
     if "etapa" not in df.columns:
         df["etapa"] = pd.Series(dtype="object")
+    if "sexo" not in df.columns:
+        df["sexo"] = pd.Series(dtype="object")
+    if "pv_kg" not in df.columns:
+        df["pv_kg"] = pd.Series(dtype="float64")
+    if "cv_pct" not in df.columns:
+        df["cv_pct"] = pd.Series(dtype="float64")
+    if "corral_comparacion" not in df.columns:
+        df["corral_comparacion"] = pd.Series(dtype="float64")
 
     df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
     df["nombre"] = df["nombre"].fillna("").astype(str)
     df["etapa"] = df["etapa"].fillna("").astype(str)
+    df["sexo"] = df["sexo"].fillna("").astype(str)
+    df["pv_kg"] = pd.to_numeric(df["pv_kg"], errors="coerce").fillna(0.0)
+    df["cv_pct"] = pd.to_numeric(df["cv_pct"], errors="coerce").fillna(0.0)
+    df["corral_comparacion"] = pd.to_numeric(df["corral_comparacion"], errors="coerce").fillna(0.0)
 
     return df
 
@@ -903,21 +915,64 @@ with tab_raciones:
     opciones_ingred = [""] + sorted(alimentos_df["ORIGEN"].dropna().astype(str).unique().tolist())
 
     st.markdown("### Catálogo de raciones")
+    cat_display = cat.copy()
+    cat_display["cv_ms_kg"] = (
+        pd.to_numeric(cat_display.get("pv_kg", 0.0), errors="coerce").fillna(0.0)
+        * pd.to_numeric(cat_display.get("cv_pct", 0.0), errors="coerce").fillna(0.0)
+        / 100.0
+    ).round(2)
+    cols_order = [
+        "id",
+        "nombre",
+        "etapa",
+        "sexo",
+        "pv_kg",
+        "cv_pct",
+        "corral_comparacion",
+        "cv_ms_kg",
+    ]
+    existing_cols = [c for c in cols_order if c in cat_display.columns]
+    cat_display = cat_display.reindex(columns=existing_cols)
+
     grid_cat = st.data_editor(
-        cat,
+        cat_display,
         column_config={
-            "id": st.column_config.NumberColumn("ID", min_value=1, step=1),
-            "nombre": st.column_config.TextColumn("NOMBRE"),
-            "etapa": st.column_config.SelectboxColumn("ETAPA", options=["","RECRIA","terminacion"])
+            "id": st.column_config.NumberColumn("ID", min_value=1, step=1, disabled=True),
+            "nombre": st.column_config.TextColumn("NOMBRE", disabled=True),
+            "etapa": st.column_config.SelectboxColumn(
+                "ETAPA", options=["", "RECRIA", "terminacion"], disabled=True
+            ),
+            "sexo": st.column_config.TextColumn("SEXO", disabled=True),
+            "pv_kg": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=1000.0, step=0.5),
+            "cv_pct": st.column_config.NumberColumn(
+                "CV (%)", min_value=0.0, max_value=20.0, step=0.1
+            ),
+            "corral_comparacion": st.column_config.NumberColumn(
+                "Corral de comparación", min_value=0.0, max_value=1000.0, step=1.0
+            ),
+            "cv_ms_kg": st.column_config.NumberColumn(
+                "CV MS (kg)", disabled=True, help="Calculado como PV × CV% / 100"
+            ),
         },
-        num_rows="dynamic", use_container_width=True, hide_index=True, key="grid_rac_catalog"
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="grid_rac_catalog",
     )
+    grid_cat["cv_ms_kg"] = (
+        pd.to_numeric(grid_cat.get("pv_kg", 0.0), errors="coerce").fillna(0.0)
+        * pd.to_numeric(grid_cat.get("cv_pct", 0.0), errors="coerce").fillna(0.0)
+        / 100.0
+    ).round(2)
     c1, c2 = st.columns(2)
     if c1.button("💾 Guardar catálogo"):
-        if grid_cat["id"].duplicated().any():
+        if grid_cat.get("id", pd.Series(dtype=int)).duplicated().any():
             st.error("IDs duplicados en el catálogo.")
         else:
-            save_catalog(grid_cat)
+            out_catalog = grid_cat.copy()
+            if "cv_ms_kg" in out_catalog.columns:
+                out_catalog = out_catalog.drop(columns=["cv_ms_kg"])
+            save_catalog(out_catalog)
             st.success("Catálogo guardado.")
             rerun_with_cache_reset()
 
