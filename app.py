@@ -120,12 +120,34 @@ BASE_CFG = load_base_cfg()
 STORE_CFG = load_user_store()
 CFG = merge_credentials(BASE_CFG, STORE_CFG)
 
-cookie_cfg = CFG.get("cookie", {})
+# --- Crear Authenticate con ARGUMENTOS POSICIONALES (compat 0.3.2) ---
+# Validaciones mínimas:
+creds = CFG.get("credentials") or {}
+if not isinstance(creds, dict) or "usernames" not in creds or not isinstance(creds["usernames"], dict):
+    st.error("Config inválida: falta 'credentials.usernames' (dict).")
+    st.stop()
+
+cookie_cfg = CFG.get("cookie") or {}
+cookie_name = str(cookie_cfg.get("name", "gefeed_cookie"))
+cookie_key = str(cookie_cfg.get("key", "feedlot_key"))
+try:
+    cookie_expiry_days = int(cookie_cfg.get("expiry_days", 7))
+except Exception:
+    cookie_expiry_days = 7
+
+# 'preauthorized' en 0.3.2 puede venir como dict {"emails":[...]} o lista
+preauth_cfg = CFG.get("preauthorized") or []
+preauthorized = (
+    preauth_cfg.get("emails", []) if isinstance(preauth_cfg, dict) else preauth_cfg
+) or []
+
+# IMPORTANTE: firma posicional para 0.3.2 => (credentials, cookie_name, key, cookie_expiry_days, preauthorized)
 authenticator = stauth.Authenticate(
-    credentials=CFG.get("credentials", {}),
-    cookie_name=cookie_cfg.get("name", "gefeed_cookie"),
-    key=cookie_cfg.get("key", "feedlot_key"),
-    cookie_expiry_days=cookie_cfg.get("expiry_days", 7),
+    creds,
+    cookie_name,
+    cookie_key,
+    cookie_expiry_days,
+    preauthorized,
 )
 
 # Manejo defensivo del retorno (tupla/dict/None)
