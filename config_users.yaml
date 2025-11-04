@@ -1,18 +1,18 @@
 credentials:
   usernames:
     juan:
-      email: prueba
-      name: test
-      password: '2019'
+      email: juan@example.com
+      name: Juan Test
+      password: "$2b$12$duPnpyXfX5sjuGJVluup2OJtcI9DiaOvib6dnXsFtb1MM05OSfPl2"
     ana:
       email: ana@example.com
       name: Ana Gómez
-      password: '$2b$12$X0W5.JFge3iG3Q9eFzq3Hu=='
+      password: "$2b$12$.IhRMf3NdfyoPgZt9JjYf.g.ZRWBa3xJjqlfIVUaa/fzkO344Gp.u"
 
 cookie:
   expiry_days: 30
-  key: 'some_signature_key'
-  name: 'gefeed_cookie'
+  key: "cambia_esta_clave_larga_y_aleatoria"
+  name: "gefeed_cookie_v2"
 
 preauthorized:
   emails: []
