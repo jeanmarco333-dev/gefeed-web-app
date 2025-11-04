@@ -1222,26 +1222,39 @@ with tab_raciones:
         cols_order = ["id","nombre","etapa","sexo","pv_kg","cv_pct","corral_comparacion","cv_ms_kg"]
         existing_cols = [c for c in cols_order if c in cat_display.columns]
         cat_display = cat_display.reindex(columns=existing_cols)
-        cat_display = cat_display.set_index(["id","nombre","etapa","sexo"])
 
-        editable_cat_cols = [c for c in ["pv_kg","cv_pct","corral_comparacion"] if c in cat_display.columns]
+        column_config = {}
+        if "id" in cat_display.columns:
+            column_config["id"] = st.column_config.NumberColumn("ID", min_value=0, step=1)
+        if "nombre" in cat_display.columns:
+            column_config["nombre"] = st.column_config.TextColumn("Nombre")
+        if "etapa" in cat_display.columns:
+            column_config["etapa"] = st.column_config.TextColumn("Etapa")
+        if "sexo" in cat_display.columns:
+            column_config["sexo"] = st.column_config.TextColumn("Sexo")
+        if "pv_kg" in cat_display.columns:
+            column_config["pv_kg"] = st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=1000.0, step=0.5)
+        if "cv_pct" in cat_display.columns:
+            column_config["cv_pct"] = st.column_config.NumberColumn("CV (%)", min_value=0.0, max_value=20.0, step=0.1)
+        if "corral_comparacion" in cat_display.columns:
+            column_config["corral_comparacion"] = st.column_config.NumberColumn(
+                "Corral de comparación", min_value=0.0, max_value=1000.0, step=1.0
+            )
+        if "cv_ms_kg" in cat_display.columns:
+            column_config["cv_ms_kg"] = st.column_config.NumberColumn(
+                "CV (kg MS)", disabled=True, format="%.2f"
+            )
+
         grid_cat = st.data_editor(
-            cat_display[editable_cat_cols],
-            column_config={
-                "pv_kg": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=1000.0, step=0.5),
-                "cv_pct": st.column_config.NumberColumn("CV (%)", min_value=0.0, max_value=20.0, step=0.1),
-                "corral_comparacion": st.column_config.NumberColumn("Corral de comparación", min_value=0.0, max_value=1000.0, step=1.0),
-            },
-            column_order=editable_cat_cols,
+            cat_display,
+            column_config=column_config,
+            column_order=existing_cols,
             num_rows="dynamic",
             use_container_width=True,
-            hide_index=False,
+            hide_index=True,
             key="grid_rac_catalog",
         )
-        cat_updated = cat_display.copy()
-        for col in editable_cat_cols:
-            cat_updated[col] = grid_cat[col]
-        cat_preview = cat_updated.reset_index()
+        cat_preview = grid_cat.copy()
         cat_preview["cv_ms_kg"] = (
             pd.to_numeric(cat_preview.get("pv_kg", 0.0), errors="coerce").fillna(0.0)
             * pd.to_numeric(cat_preview.get("cv_pct", 0.0), errors="coerce").fillna(0.0)
