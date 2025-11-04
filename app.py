@@ -511,7 +511,7 @@ with tab_corrales:
 
         with st.form("form_base"):
             grid = st.data_editor(enrich_and_calc(base), column_config=colcfg, num_rows="dynamic",
-                                  use_container_width=True, hide_index=True, key="grid_corrales")
+                                  width='stretch', hide_index=True, key="grid_corrales")
             c1, c2 = st.columns(2)
             save = c1.form_submit_button("💾 Guardar base", type="primary")
             refresh = c2.form_submit_button("🔄 Recargar")
@@ -543,7 +543,7 @@ with tab_alimentos:
             if tipo.strip(): view = view[view["TIPO"].str.contains(tipo, case=False, na=False)]
             if ms_min>0: view = view[pd.to_numeric(view["MS"], errors="coerce").fillna(0)>=ms_min]
         grid_alim = st.data_editor(
-            view, num_rows="dynamic", use_container_width=True, hide_index=True, key="grid_alimentos",
+            view, num_rows="dynamic", width='stretch', hide_index=True, key="grid_alimentos",
             column_config={
                 "ORIGEN": st.column_config.TextColumn("Origen", help="Nombre único del alimento (clave)."),
                 "PRESENTACION": st.column_config.TextColumn("Presentación"),
@@ -708,7 +708,7 @@ with tab_mixer:
                                     "novillos": int(corrales_df["novillos"].sum()),
                                 }
                                 corrales_df = pd.concat([corrales_df, pd.DataFrame([resumen])], ignore_index=True)
-                                st.dataframe(corrales_df, use_container_width=True, hide_index=True)
+                                st.dataframe(corrales_df, width='stretch', hide_index=True)
 
                                 # export rápido del plan:
                                 st.download_button(
@@ -747,7 +747,7 @@ with tab_mixer:
                 plan = mixer_kg_by_ingredient(ings, total_kg)
                 if plan:
                     df_plan = pd.DataFrame({"Ingrediente": list(plan.keys()), "Kg (as-fed)": list(plan.values())})
-                    st.dataframe(df_plan, use_container_width=True)
+                    st.dataframe(df_plan, width='stretch')
                     st.caption(f"Total calculado: {sum(plan.values()):.1f} kg (debería ≈ {total_kg:.1f} kg)")
                     st.toast("Plan de carga generado.", icon="✅")
                 else:
@@ -782,7 +782,7 @@ with tab_parametros:
     with card("⚙️ Parámetros técnicos", "Alimentos, Mixers, PV, Requerimientos"):
         st.markdown("### Catálogo de alimentos")
         alim_df = load_alimentos()
-        grid_alim_p = st.data_editor(alim_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="param_alimentos")
+        grid_alim_p = st.data_editor(alim_df, num_rows="dynamic", width='stretch', hide_index=True, key="param_alimentos")
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar alimentos (parámetros)", type="primary"):
             save_alimentos(grid_alim_p); st.success("Alimentos guardados."); st.toast("Alimentos actualizados.", icon="🧾"); rerun_with_cache_reset()
@@ -796,7 +796,7 @@ with tab_parametros:
                 "mixer_id": st.column_config.TextColumn("Mixer ID"),
                 "capacidad_kg": st.column_config.NumberColumn("Capacidad (kg)", min_value=0, step=10)
             },
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="param_mixers"
+            num_rows="dynamic", width='stretch', hide_index=True, key="param_mixers"
         )
         if c2.button("💾 Guardar mixers", type="primary"):
             save_mixers(grid_mix); st.success("Mixers guardados."); st.toast("Mixers actualizados.", icon="🛠"); rerun_with_cache_reset()
@@ -807,7 +807,7 @@ with tab_parametros:
         grid_pes = st.data_editor(
             pesos_df,
             column_config={"peso_kg": st.column_config.NumberColumn("PV (kg)", min_value=1.0, max_value=2000.0, step=0.5)},
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="param_pesos"
+            num_rows="dynamic", width='stretch', hide_index=True, key="param_pesos"
         )
         p1, p2 = st.columns(2)
         if p1.button("💾 Guardar PV (kg)", type="primary"):
@@ -824,7 +824,7 @@ with tab_parametros:
                 "requerimiento_energetico": st.column_config.NumberColumn("Req. energético (Mcal EM/día)", min_value=0.0, max_value=50.0, step=0.1),
                 "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=10.0, step=0.1),
             },
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="param_reqener"
+            num_rows="dynamic", width='stretch', hide_index=True, key="param_reqener"
         )
         r1, r2 = st.columns(2)
         if r1.button("💾 Guardar requerimientos energéticos", type="primary"):
@@ -843,7 +843,7 @@ with tab_parametros:
                 "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=20.0, step=0.1),
                 "req_proteico": st.column_config.NumberColumn("Req. proteico (g PB/día)", min_value=0.0, max_value=5000.0, step=1.0),
             },
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="param_reqprot"
+            num_rows="dynamic", width='stretch', hide_index=True, key="param_reqprot"
         )
         rp1, rp2 = st.columns(2)
         if rp1.button("💾 Guardar requerimientos proteicos", type="primary"):
@@ -884,7 +884,7 @@ with tab_raciones:
                 "corral_comparacion": st.column_config.NumberColumn("Corral de comparación", min_value=0.0, max_value=1000.0, step=1.0),
                 "cv_ms_kg": st.column_config.NumberColumn("CV MS (kg)", disabled=True, help="Calculado como PV × CV% / 100"),
             },
-            num_rows="dynamic", use_container_width=True, hide_index=True, key="grid_rac_catalog",
+            num_rows="dynamic", width='stretch', hide_index=True, key="grid_rac_catalog",
         )
         grid_cat["cv_ms_kg"] = (
             pd.to_numeric(grid_cat.get("pv_kg", 0.0), errors="coerce").fillna(0.0)
@@ -927,7 +927,7 @@ with tab_raciones:
 
             grid_rec = st.data_editor(
                 rec_r[["id_racion","nombre_racion","ingrediente","pct_ms"]],
-                column_config=colcfg, use_container_width=True, hide_index=True, num_rows=6, key="grid_rac_recipe"
+                column_config=colcfg, width='stretch', hide_index=True, num_rows=6, key="grid_rac_recipe"
             )
 
             total_pct = float(pd.to_numeric(grid_rec["pct_ms"], errors="coerce").fillna(0.0).sum())
@@ -958,6 +958,6 @@ with tab_raciones:
                 w_ms = float(w_ms) if w_ms>0 else 1.0
                 factor_asfed = 1.0 / w_ms
                 st.write(f"**MS ponderada:** {w_ms*100:.1f}%  →  **Factor as-fed:** ×{factor_asfed:.3f}")
-                st.dataframe(df_view[["ingrediente","pct_ms","MS_%"]], use_container_width=True)
+                st.dataframe(df_view[["ingrediente","pct_ms","MS_%"]], width='stretch')
             else:
                 st.info("Agregá ingredientes para ver la MS ponderada.")
