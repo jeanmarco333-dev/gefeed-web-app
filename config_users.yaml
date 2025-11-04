@@ -1,9 +1,9 @@
 credentials:
   usernames:
     juan:
-      email: juan@example.com
-      name: Juan Pérez
-      password: '$2b$12$eImiTXuWVxfM37uY4JANjQ=='
+      email: prueba
+      name: test
+      password: '2019'
     ana:
       email: ana@example.com
       name: Ana Gómez
