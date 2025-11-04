@@ -15,3 +15,13 @@ MAIZ,Maiz - silaje pocas maz,Ingrediente - Fibra,0.34,60%,7.00,2.70,2.90,$ 55.00
 TRIGO,TRGO-rabacillo,Ingrediente - fibra,0.80,69%,12.00,1.12,1.20,$ 86.00,2.50,0.98
 POROTO,MUNG DESC,Ingrediente - Proteico,0.88,70%,16.00,2.00,1.12,$ 100.00,2.00,1.10
 BRAQ0,ROLLO BR,Ingrediente - fibra,0.70,65%,8.00,0.00,1.30,$ 50.00,1.00,0.50
+MAIZ,MAIZ - grano humedo,Ingrediente - Energetico,0.70,85%,9.00,1.20,1.15,$ 140.00,3.05,1.50
+TRIGO,TRIGO - grano,Ingrediente - Energetico,0.88,86%,12.00,1.50,1.20,$ 150.00,3.10,1.50
+TRIGO,TRIGO - pellet rabacillo,Ingrediente - Fibra,0.88,70%,12.00,1.10,1.10,$ 120.00,2.40,1.00
+MAIZ,MAIZ - 33% MS silaje muchas mazorcas,Ingrediente - Fibra,0.33,62%,7.00,2.00,2.50,$ 60.00,1.80,0.65
+MAIZ,MAIZ - 40% MS silaje muchas mazorcas,Ingrediente - Fibra,0.40,65%,7.50,2.20,2.60,$ 60.00,1.90,0.70
+MAIZ,MAIZ - 27% MS silaje muchas mazorcas,Ingrediente - Fibra,0.27,60%,6.50,1.80,2.40,$ 60.00,1.70,0.60
+MAIZ,MAIZ - silaje muchas mazorcas,Ingrediente - Fibra,0.30,62%,7.00,2.00,2.50,$ 60.00,1.80,0.65
+SORGO,SORGO - grano partido humedo,Ingrediente - Energetico,0.85,82%,8.50,1.30,1.15,$ 140.00,3.00,1.38
+POROTO,POROTO - grano,Ingrediente - Proteico,0.88,80%,24.00,1.50,1.10,$ 180.00,2.20,1.05
+POROTO,POROTO - desactivado,Ingrediente - Proteico,0.88,78%,26.00,1.50,1.10,$ 190.00,2.20,1.05

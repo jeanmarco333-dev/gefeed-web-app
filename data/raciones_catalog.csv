@@ -1,13 +1,13 @@
-id,NOMBRE,ETAPA
-1,R-DTTE,RECRIA
-2,R-JOSE,RECRIA
-3,term,RECRIA
-4,R-ALTA PROTEINA,RECRIA
-5,R-SUPER,RECRIA
-6,R-TERCERA BAJA,terminacion
-7,T-LEVANTE,terminacion
-8,T-MG STD,terminacion
-9,T-MG SECO,terminacion
-10,T-MG HUMEDO,terminacion
-11,Test No usar,
-12,T-ALFA,
+id,nombre,etapa,sexo,pv_kg,cv_pct,corral_comparacion
+1,R-DTTE,RECRIA,novillos,150,2.8,7
+2,R-JOSE,RECRIA,vaquillonas,262.5,2.9,9
+3,term,RECRIA,novillos,325,2.8,1
+4,R-ALTA PROTEINA,RECRIA,novillos,175,2.8,10
+5,R-SUPER,RECRIA,novillos,250,2.8,5
+6,R-TERCERA BAJA,terminacion,novillos,250,2.8,5
+7,T-LEVANTE,terminacion,novillos,250,2.8,5
+8,T-MG STD,terminacion,novillos,250,2.8,5
+9,T-MG SECO,terminacion,novillos,300,2.8,5
+10,T-MG HUMEDO,terminacion,novillos,300,2.8,5
+11,Test No usar,terminacion,novillos,300,2.8,5
+12,T-ALFA,terminacion,novillos,300,3.0,5

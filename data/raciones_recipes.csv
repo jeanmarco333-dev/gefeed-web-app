@@ -1,0 +1,51 @@
+id_racion,nombre_racion,ingrediente,pct_ms
+1,R-DTTE,Proteico PD Creston,7.0
+1,R-DTTE,GARBANZO,50.0
+1,R-DTTE,SORGO- silaje,26.0
+1,R-DTTE,ROLLO ALFA,17.0
+2,R-JOSE,Proteico PD Creston,6.0
+2,R-JOSE,MAIZ - grano grado 2,44.0
+2,R-JOSE,SORGO- silaje,7.0
+2,R-JOSE,TRGO-rabacillo,30.0
+2,R-JOSE,ROLLO BR,13.0
+3,term,MAIZ - grano grado 2,72.0
+3,term,Proteico PD Creston,9.0
+3,term,SORGO- silaje,10.0
+3,term,TRGO-rabacillo,9.0
+4,R-ALTA PROTEINA,SORGO- silaje,25.0
+4,R-ALTA PROTEINA,GARBANZO,23.0
+4,R-ALTA PROTEINA,Proteico PD Creston,40.0
+4,R-ALTA PROTEINA,ROLLO ALFA,12.0
+5,R-SUPER,SORGO- silaje,13.5
+5,R-SUPER,TRIGO - grano,67.5
+5,R-SUPER,Proteico PD Creston,7.5
+5,R-SUPER,MAIZ - grano grado 2,11.5
+6,R-TERCERA BAJA,MAIZ - 33% MS silaje muchas mazorcas,56.0
+6,R-TERCERA BAJA,Proteico PD Creston,12.0
+6,R-TERCERA BAJA,MAIZ - grano grado 2,32.0
+7,T-LEVANTE,SORGO - grano partido humedo,13.5
+7,T-LEVANTE,Proteico PD Creston,67.5
+7,T-LEVANTE,MAIZ - grano grado 2,19.0
+8,T-MG STD,MAIZ - 33% MS silaje muchas mazorcas,28.0
+8,T-MG STD,TRIGO - pellet rabacillo,4.0
+8,T-MG STD,Proteico PD Creston,11.0
+8,T-MG STD,MAIZ - grano humedo,57.0
+9,T-MG SECO,MAIZ - 40% MS silaje muchas mazorcas,28.0
+9,T-MG SECO,TRIGO - pellet rabacillo,4.0
+9,T-MG SECO,Proteico PD Creston,11.0
+9,T-MG SECO,MAIZ - grano humedo,57.0
+10,T-MG HUMEDO,MAIZ - 27% MS silaje muchas mazorcas,28.0
+10,T-MG HUMEDO,TRIGO - pellet rabacillo,4.0
+10,T-MG HUMEDO,Proteico PD Creston,11.0
+10,T-MG HUMEDO,MAIZ - grano humedo,57.0
+11,Test No usar,SORGO- silaje,13.5
+11,Test No usar,TRIGO - grano,60.0
+11,Test No usar,Proteico PD Creston,7.5
+11,Test No usar,MAIZ - grano grado 2,11.0
+11,Test No usar,GARBANZO,2.0
+11,Test No usar,POROTO - grano,6.0
+12,T-ALFA,MAIZ - silaje muchas mazorcas,20.0
+12,T-ALFA,MAIZ - grano grado 2,30.0
+12,T-ALFA,Proteico PD Creston,13.0
+12,T-ALFA,POROTO - desactivado,29.0
+12,T-ALFA,TRIGO - pellet rabacillo,8.0
