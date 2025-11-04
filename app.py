@@ -202,6 +202,29 @@ details[open] .expander-body { animation: fadeIn .2s ease both; }
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* DataEditor: encabezados de columnas */
+[data-testid="stDataEditor"] thead tr th {
+  background: #F3F4F6;
+  color: #111827;
+  border-bottom: 2px solid #E5E7EB;
+}
+[data-testid="stDataEditor"] thead tr th:first-child {
+  background: #E0F2FE;
+}
+[data-testid="stDataEditor"] thead tr th:nth-child(2) {
+  background: #FEF3C7;
+}
+[data-testid="stDataEditor"] thead tr th:nth-child(3) {
+  background: #DCFCE7;
+}
+[data-testid="stDataEditor"] thead tr th:hover {
+  filter: brightness(0.98);
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Helpers de UI
 @contextmanager
 def card(title: str, subtitle: str | None = None, icon: str = ""):
@@ -255,7 +278,7 @@ if not BASE_PATH.exists():
     pd.DataFrame(columns=[
         "tipo_racion","nro_corral","cod_racion","nombre_racion","categ",
         "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
-        "kg_turno","AP_obt","turnos","meta_salida","dias_TERM","semanas_TERM","EFC_conv"
+        "kg_turno","turnos","meta_salida"
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
 if not REQENER_PATH.exists():
     pd.DataFrame(columns=REQENER_COLS).to_csv(REQENER_PATH, index=False, encoding="utf-8")
@@ -538,12 +561,57 @@ def save_base(df: pd.DataFrame):
 def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
     cat_df = load_catalog()
     mix_df = load_mixers()
-    nombre_to_id = dict(zip(cat_df["nombre"], cat_df["id"]))
-    mixer_cap_map = dict(zip(mix_df["mixer_id"], mix_df["capacidad_kg"]))
+    cat_names = cat_df["nombre"].astype(str) if "nombre" in cat_df.columns else pd.Series(dtype=str)
+    nombre_to_id = dict(zip(cat_names, cat_df["id"])) if "id" in cat_df.columns else {}
+    etapa_series = cat_df["etapa"] if "etapa" in cat_df.columns else pd.Series([""] * len(cat_df))
+    etapa_series = etapa_series.fillna("").astype(str)
+    nombre_to_tipo = dict(zip(cat_names, etapa_series))
+    cv_series = cat_df.get("cv_pct")
+    if cv_series is not None:
+        nombre_to_cv = dict(
+            zip(
+                cat_names,
+                pd.to_numeric(cv_series, errors="coerce").fillna(0.0),
+            )
+        )
+    else:
+        nombre_to_cv = {}
+    mix_clean = mix_df.dropna(subset=["mixer_id"]).copy()
+    mix_clean["mixer_id"] = mix_clean["mixer_id"].astype(str)
+    mixer_cap_map = dict(zip(mix_clean["mixer_id"], mix_clean["capacidad_kg"]))
 
     df = df.copy()
-    df["cod_racion"] = df.apply(lambda r: nombre_to_id.get(str(r.get("nombre_racion", "")), ""), axis=1)
-    df["capacidad_kg"] = df.apply(lambda r: mixer_cap_map.get(str(r.get("mixer_id", "")), 0), axis=1)
+    df = df.drop(columns=["AP_obt", "dias_TERM", "semanas_TERM", "EFC_conv"], errors="ignore")
+
+    for col, default in {
+        "nombre_racion": "",
+        "tipo_racion": "",
+        "CV_pct": 0.0,
+        "turnos": 1,
+        "nro_cab": 0,
+        "PV_kg": 0.0,
+        "meta_salida": 0.0,
+        "AP_preten": 0.0,
+        "mixer_id": "",
+    }.items():
+        if col not in df.columns:
+            df[col] = default
+
+    df["nombre_racion"] = df["nombre_racion"].fillna("").astype(str)
+    df["mixer_id"] = df["mixer_id"].fillna("").astype(str)
+
+    df["cod_racion"] = df["nombre_racion"].map(nombre_to_id).fillna("")
+    df["tipo_racion"] = df["nombre_racion"].map(nombre_to_tipo).fillna("")
+
+    def _cv(row):
+        current = pd.to_numeric(row.get("CV_pct", 0.0), errors="coerce")
+        nombre = str(row.get("nombre_racion", ""))
+        if pd.isna(current) or float(current) == 0.0:
+            return float(nombre_to_cv.get(nombre, current if not pd.isna(current) else 0.0))
+        return float(current)
+
+    df["CV_pct"] = df.apply(_cv, axis=1)
+    df["capacidad_kg"] = df["mixer_id"].map(mixer_cap_map).fillna(0)
 
     def kg_turno_calc(r):
         try:
@@ -583,28 +651,9 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 
     df["kg_turno_asfed_calc"] = df.apply(kg_turno_asfed, axis=1)
 
-    def dias_term(r):
-        try:
-            delta = float(r["meta_salida"]) - float(r["PV_kg"])
-            ap = max(float(r["AP_obt"]), 0.0001)
-            d = max(delta / ap, 0.0)
-            return int(round(d))
-        except Exception:
-            return 0
+    df["nro_corral"] = pd.to_numeric(df.get("nro_corral", 0), errors="coerce").fillna(0).astype(int)
+    df = df.sort_values("nro_corral").reset_index(drop=True)
 
-    df["dias_TERM"] = df.apply(dias_term, axis=1)
-    df["semanas_TERM"] = (df["dias_TERM"] / 7.0).round(1)
-
-    def efc(r):
-        try:
-            hd = max(float(r["nro_cab"]), 1.0)
-            kg_dia_hd = (float(r["kg_turno_asfed_calc"]) * float(r["turnos"])) / hd
-            ap = max(float(r["AP_obt"]), 0.0001)
-            return round(kg_dia_hd / ap, 2)
-        except Exception:
-            return 0.0
-
-    df["EFC_conv"] = df.apply(efc, axis=1)
     return df
 
 # ------------------------------------------------------------------------------
@@ -631,40 +680,47 @@ with tab_corrales:
         mix_df = load_mixers()
         base = load_base()
 
-        tipos = ["Terminación", "Recría"]
+        etapas_series = cat_df.get("etapa", pd.Series(dtype=str))
+        tipos = sorted([t for t in etapas_series.dropna().astype(str).unique() if t.strip()]) or [
+            "Terminación",
+            "Recría",
+        ]
         categorias = ["va", "nov"]
         pesos_lista = load_pesos()["peso_kg"].tolist()
-        mixers = mix_df["mixer_id"].tolist()
-        mixer_cap_map = dict(zip(mix_df["mixer_id"], mix_df["capacidad_kg"]))
-        nombre_to_id = dict(zip(cat_df["nombre"], cat_df["id"]))
+        mix_clean = mix_df.dropna(subset=["mixer_id"]).copy()
+        mix_clean["mixer_id"] = mix_clean["mixer_id"].astype(str)
+        mixers = mix_clean["mixer_id"].tolist()
+        mixer_cap_map = dict(zip(mix_clean["mixer_id"], mix_clean["capacidad_kg"]))
 
         if base.empty:
             base = pd.DataFrame({
-                "tipo_racion":["Terminación"]*20,
-                "nro_corral":list(range(1,21)),
-                "cod_racion":["" for _ in range(20)],
-                "nombre_racion":["" for _ in range(20)],
-                "categ":["va"]*20,
-                "PV_kg":[275]*20,
-                "CV_pct":[2.8]*20,
-                "AP_preten":[1.0]*20,
-                "nro_cab":[0]*20,
-                "mixer_id":[mixers[0] if mixers else ""]*20,
-                "capacidad_kg":[mixer_cap_map.get(mixers[0],0) if mixers else 0]*20,
-                "kg_turno":[0.0]*20,
-                "AP_obt":[1.0]*20,
-                "turnos":[4]*20,
-                "meta_salida":[350]*20,
-                "dias_TERM":[0]*20,
-                "semanas_TERM":[0.0]*20,
-                "EFC_conv":[0.0]*20,
+                "nro_corral": list(range(1, 21)),
+                "nombre_racion": ["" for _ in range(20)],
+                "cod_racion": ["" for _ in range(20)],
+                "tipo_racion": [""] * 20,
+                "categ": ["va"] * 20,
+                "PV_kg": [275] * 20,
+                "CV_pct": [2.8] * 20,
+                "AP_preten": [1.0] * 20,
+                "nro_cab": [0] * 20,
+                "mixer_id": [mixers[0] if mixers else ""] * 20,
+                "capacidad_kg": [mixer_cap_map.get(mixers[0], 0) if mixers else 0] * 20,
+                "kg_turno": [0.0] * 20,
+                "turnos": [4] * 20,
+                "meta_salida": [350] * 20,
             })
 
+        racion_options = cat_df["nombre"].astype(str).tolist() if "nombre" in cat_df.columns else []
+
         colcfg = {
-            "tipo_racion": st.column_config.SelectboxColumn("tipo de ración", options=tipos, required=True),
             "nro_corral": st.column_config.NumberColumn("n° de Corral", min_value=1, max_value=9999, step=1),
+            "tipo_racion": st.column_config.TextColumn(
+                "tipo de ración", help="Auto: se llena según la ración elegida", disabled=True
+            ),
             "nombre_racion": st.column_config.SelectboxColumn(
-                "nombre la ración", options=[""] + cat_df["nombre"].astype(str).tolist(), help="Autocompleta código"
+                "nombre la ración",
+                options=[""] + racion_options,
+                help="Autocompleta tipo y puede pisar CV%",
             ),
             "categ": st.column_config.SelectboxColumn("categ", options=categorias),
             "PV_kg": st.column_config.SelectboxColumn("PV (kg)", options=pesos_lista),
@@ -672,25 +728,50 @@ with tab_corrales:
             "AP_preten": st.column_config.NumberColumn("AP (kg) PRETEN", min_value=0.0, max_value=5.0, step=0.1),
             "nro_cab": st.column_config.NumberColumn("NRO CAB (und)", min_value=0, max_value=100000, step=1),
             "mixer_id": st.column_config.SelectboxColumn("Mixer", options=[""] + mixers, help="Trae capacidad"),
-            "capacidad_kg": st.column_config.NumberColumn("capacidad (kg)", min_value=0, max_value=200000, step=10, disabled=True),
-            "AP_obt": st.column_config.NumberColumn("AP OBT (kg/día)", min_value=0.0, max_value=5.0, step=0.01),
+            "capacidad_kg": st.column_config.NumberColumn(
+                "capacidad (kg)", min_value=0, max_value=200000, step=10, disabled=True
+            ),
             "turnos": st.column_config.NumberColumn("turnos", min_value=1, max_value=24, step=1),
             "meta_salida": st.column_config.NumberColumn("META DE SALIDA (kg)", min_value=0, max_value=2000, step=5),
         }
 
         editable_cols = [
-            "tipo_racion","nro_corral","nombre_racion","categ","PV_kg","CV_pct",
-            "AP_preten","nro_cab","mixer_id","capacidad_kg","AP_obt","turnos","meta_salida",
+            "nro_corral",
+            "nombre_racion",
+            "categ",
+            "PV_kg",
+            "CV_pct",
+            "AP_preten",
+            "nro_cab",
+            "mixer_id",
+            "capacidad_kg",
+            "turnos",
+            "meta_salida",
+        ]
+
+        display_cols = [
+            "nro_corral",
+            "tipo_racion",
+            "nombre_racion",
+            "categ",
+            "PV_kg",
+            "CV_pct",
+            "AP_preten",
+            "nro_cab",
+            "mixer_id",
+            "capacidad_kg",
+            "turnos",
+            "meta_salida",
         ]
 
         with st.form("form_base"):
             enriched = enrich_and_calc_base(base)
             grid = st.data_editor(
-                enriched[editable_cols],
+                enriched[display_cols],
                 column_config=colcfg,
-                column_order=editable_cols,
+                column_order=display_cols,
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 key="grid_corrales",
             )
@@ -703,7 +784,7 @@ with tab_corrales:
                     if col in grid.columns:
                         out[col] = grid[col]
                 out = enrich_and_calc_base(out)
-                for col in ["kg_turno_calc","kg_turno_asfed_calc"]:
+                for col in ["kg_turno_calc", "kg_turno_asfed_calc"]:
                     if col in out.columns:
                         out = out.drop(columns=[col])
                 save_base(out)
