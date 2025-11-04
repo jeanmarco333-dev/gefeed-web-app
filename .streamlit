@@ -1,0 +1,10 @@
+[theme]
+# Claro u oscuro
+base = "light"                      # o "dark"
+
+# Colores de tu marca (cambiá los hex a gusto)
+primaryColor = "#0F6CF2"            # color de botones/links activos
+backgroundColor = "#F7FAFF"         # fondo de la página
+secondaryBackgroundColor = "#FFFFFF"# fondo de tarjetas/controles
+textColor = "#0B1221"               # texto principal
+font = "sans serif"                 # "serif" | "sans serif" | "monospace"
