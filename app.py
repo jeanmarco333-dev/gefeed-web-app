@@ -1611,7 +1611,7 @@ with tab_raciones:
                 st.session_state[cv_key] = base_cv
                 st.session_state[prev_corral_key] = selected_corral_label
 
-            pv_value = params_cols[1].number_input(
+            pv_input = params_cols[1].number_input(
                 "PV (kg)",
                 min_value=0.0,
                 max_value=1500.0,
@@ -1619,7 +1619,7 @@ with tab_raciones:
                 step=1.0,
                 key=pv_key,
             )
-            cv_value = params_cols[2].number_input(
+            cv_input = params_cols[2].number_input(
                 "CV (%)",
                 min_value=0.0,
                 max_value=20.0,
@@ -1627,6 +1627,8 @@ with tab_raciones:
                 step=0.1,
                 key=cv_key,
             )
+            pv_value = _num(pv_input, 0.0)
+            cv_value = _num(cv_input, 0.0)
             consumo_ms = pv_value * (cv_value / 100.0)
             params_cols[3].metric("CV MS (kg)", f"{consumo_ms:.2f}")
 
@@ -1645,6 +1647,11 @@ with tab_raciones:
                 num_rows=6,
                 key="grid_rac_recipe",
             )
+            grid_rec = grid_rec.reset_index(drop=True).copy()
+            if "ingrediente" not in grid_rec.columns:
+                grid_rec["ingrediente"] = ""
+            if "pct_ms" not in grid_rec.columns:
+                grid_rec["pct_ms"] = 0.0
 
             total_pct = float(pd.to_numeric(grid_rec["pct_ms"], errors="coerce").fillna(0.0).sum())
             st.progress(min(int(total_pct), 100), text=f"Suma MS: {total_pct:.1f}%")

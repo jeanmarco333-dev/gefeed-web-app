@@ -47,16 +47,6 @@ def mixer_kg_by_ingredient(ingredients: List[Ingredient], mixer_total_kg_as_fed:
     total_asfed = sum(asfed.values()) or 1.0
     factor = mixer_total_kg_as_fed / total_asfed
     return {n: round(v * factor, 1) for n, v in asfed.items()}
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        val = float(pd.to_numeric(value, errors="coerce"))
-    except Exception:
-        return default
-    return default if pd.isna(val) else val
-
-
 def ration_split_from_pv_cv(
     rec_df: pd.DataFrame,
     alimentos_df: pd.DataFrame,
@@ -65,7 +55,21 @@ def ration_split_from_pv_cv(
 ) -> dict:
     """Calcula la distribución diaria de MS/as-fed/EM/PB/costo."""
 
-    consumo_ms = _safe_float(pv_kg) * (_safe_float(cv_pct) / 100.0)
+    def _num(x, default=0.0):
+        try:
+            v = float(pd.to_numeric(x, errors="coerce"))
+            return default if pd.isna(v) else v
+        except Exception:
+            return default
+
+    def _txt(x):
+        if pd.isna(x):
+            return ""
+        return str(x)
+
+    pv_clean = _num(pv_kg, 0.0)
+    cv_clean = _num(cv_pct, 0.0)
+    consumo_ms = pv_clean * (cv_clean / 100.0)
 
     resultado = {
         "Consumo_MS_dia": consumo_ms,
@@ -100,10 +104,10 @@ def ration_split_from_pv_cv(
         if "ORIGEN" not in alim_work.columns:
             alim_work.columns = [str(c).strip() for c in alim_work.columns]
         for _, row in alim_work.iterrows():
-            nombre = str(row.get("ORIGEN", "")).strip()
-            if not nombre:
+            origen = _txt(row.get("ORIGEN")).strip()
+            if not origen:
                 continue
-            lookup[nombre.lower()] = row
+            lookup[origen.lower()] = row.to_dict()
 
     total_pct = ingredientes["pct_ms"].sum() or 1.0
 
@@ -111,20 +115,23 @@ def ration_split_from_pv_cv(
     asfed_total = em_total = pb_total = costo_total = 0.0
 
     for _, row in ingredientes.iterrows():
-        nombre = str(row["ingrediente"]).strip()
-        pct_ms = float(row["pct_ms"])
-        inclusion = pct_ms / total_pct
+        nombre = _txt(row.get("ingrediente")).strip()
+        if not nombre:
+            continue
 
-        ref = lookup.get(nombre.lower()) or {}
+        incl_pct = _num(row.get("pct_ms", 0.0), 0.0)
+        inclusion = incl_pct / total_pct if total_pct else 0.0
 
-        ms_pct = _safe_float(ref.get("MS", 0.0))
+        ref = lookup.get(nombre.lower(), {})
+
+        ms_pct = _num(ref.get("MS", 100.0), 100.0)
+        em_val = _num(ref.get("EM", 0.0), 0.0)
+        pb_pct = _num(ref.get("PB", 0.0), 0.0)
+        precio = _num(ref.get("$/KG", 0.0), 0.0)
+
         ms_frac = ms_pct / 100.0 if ms_pct > 0 else 0.0
-        em_val = _safe_float(ref.get("EM", 0.0))
-        pb_pct = _safe_float(ref.get("PB", 0.0))
-        precio = _safe_float(ref.get("$/KG", 0.0))
-
         ms_kg = consumo_ms * inclusion
-        asfed_kg = ms_kg / (ms_frac if ms_frac > 0 else 1e-6)
+        asfed_kg = ms_kg / ms_frac if ms_frac > 1e-6 else 0.0
         em_mcal = ms_kg * em_val
         pb_g = ms_kg * (pb_pct / 100.0) * 1000.0
         costo = asfed_kg * precio
@@ -137,7 +144,7 @@ def ration_split_from_pv_cv(
         detalle.append(
             {
                 "ingrediente": nombre,
-                "pct_ms": pct_ms,
+                "pct_ms": incl_pct,
                 "MS_%_alimento": ms_pct,
                 "MS_kg": ms_kg,
                 "asfed_kg": asfed_kg,
