@@ -1024,162 +1024,331 @@ with tab_alimentos:
 # ------------------------------------------------------------------------------
 with tab_mixer:
     with card("🧮 Cálculo de descarga de mixer (as-fed)", "Plan diario por tipo de ración"):
-        st.markdown("### Descarga mixer (plan diario)")
+        st.markdown("### Planificación integral del mixer")
+
+        fecha_plan = st.date_input("Fecha", datetime.today().date(), key="mixer_plan_fecha")
 
         base_df = load_base()
         mixers_df = load_mixers()
+        raciones_recetas = build_raciones_from_recipes()
+        plan_exports: list[pd.DataFrame] = []
 
         if base_df.empty:
             st.info("No hay corrales configurados en la base.")
         elif mixers_df.empty or mixers_df["mixer_id"].dropna().empty:
             st.warning("Definí mixers en la pestaña ⚙️ Parámetros para poder planificar la descarga.")
+        elif not raciones_recetas:
+            st.info("Definí recetas en la pestaña 🧾 Ajustes de raciones para calcular la carga base.")
         else:
             base_calc = enrich_and_calc_base(base_df)
             tipos_racion = [t for t in base_calc["tipo_racion"].dropna().astype(str).unique() if t.strip()]
-            if tipos_racion:
+            if not tipos_racion:
+                st.info("Configura tipos de ración en la base para generar el plan del mixer.")
+            else:
                 mixer_options = mixers_df["mixer_id"].dropna().astype(str).tolist()
+                recetas_por_nombre = {r["nombre"]: r for r in raciones_recetas}
 
                 combos = base_calc.copy()
                 combos["turnos"] = pd.to_numeric(combos.get("turnos", 0), errors="coerce").fillna(0).astype(int)
-                combos = combos[combos["nombre_racion"].astype(str).str.strip()!=""]
+                combos = combos[combos["nombre_racion"].astype(str).str.strip() != ""]
                 combo_turnos = {}
-                for (tipo, nombre), sub in combos.groupby(["tipo_racion","nombre_racion"]):
-                    valid_turnos = sub["turnos"][sub["turnos"]>0]
+                for (tipo, nombre), sub in combos.groupby(["tipo_racion", "nombre_racion"]):
+                    valid_turnos = sub["turnos"][sub["turnos"] > 0]
                     if not valid_turnos.empty:
                         combo_turnos[(str(tipo), str(nombre))] = int(valid_turnos.mode().iloc[0])
 
                 tipo_options = sorted(tipos_racion)
                 opciones_por_tipo = {}
                 for tipo in tipo_options:
-                    subset = base_calc.loc[base_calc["tipo_racion"]==tipo, "nombre_racion"].dropna().astype(str)
+                    subset = base_calc.loc[base_calc["tipo_racion"] == tipo, "nombre_racion"].dropna().astype(str)
                     opciones_por_tipo[str(tipo)] = sorted([n for n in subset.unique() if str(n).strip()])
 
                 st.markdown("#### Planificar descargas individuales (hasta 3 cargas)")
-                st.caption("Cada descarga se limita a una combinación de tipo de ración y ración específica.")
+                st.caption("Cada descarga replica Mixer 1: carga base, turnos y descarga por corral.")
 
                 for slot in range(1, 4):
                     st.markdown(f"##### Descarga {slot}")
                     col_mix, col_tipo, col_rac, col_turnos = st.columns((1.2, 1.1, 1.1, 0.8))
                     mixer_sel = col_mix.selectbox(
-                        "Mixer", [""] + mixer_options, key=f"slot_mixer_{slot}",
+                        "Mixer",
+                        [""] + mixer_options,
+                        key=f"slot_mixer_{slot}",
                         help="Elegí el mixer que realizará esta descarga.",
                     )
                     tipo_sel = col_tipo.selectbox(
-                        "Tipo de ración", [""] + tipo_options, key=f"slot_tipo_{slot}"
+                        "Tipo de ración",
+                        [""] + tipo_options,
+                        key=f"slot_tipo_{slot}",
                     )
                     racion_opts = opciones_por_tipo.get(str(tipo_sel), [])
                     racion_sel = col_rac.selectbox(
-                        "Ración", [""] + racion_opts, key=f"slot_racion_{slot}"
+                        "Ración",
+                        [""] + racion_opts,
+                        key=f"slot_racion_{slot}",
                     )
                     default_turnos = combo_turnos.get((str(tipo_sel), str(racion_sel)), 1)
                     turnos_val = col_turnos.number_input(
-                        "Turnos", min_value=1, max_value=24, value=default_turnos, step=1,
-                        key=f"slot_turnos_{slot}"
+                        "Turnos",
+                        min_value=1,
+                        max_value=24,
+                        value=default_turnos,
+                        step=1,
+                        key=f"slot_turnos_{slot}",
                     )
 
-                    if mixer_sel and tipo_sel and racion_sel:
-                        subset = base_calc[
-                            (base_calc["tipo_racion"] == tipo_sel)
-                            & (base_calc["nombre_racion"] == racion_sel)
-                        ].copy()
-                        if subset.empty:
-                            st.info("No hay corrales asignados a esa combinación.")
-                            continue
+                    if not (mixer_sel and tipo_sel and racion_sel):
+                        st.caption("Seleccioná mixer, tipo y ración para generar el plan de esta descarga.")
+                        continue
 
-                        subset["kg_turno_asfed_calc"] = pd.to_numeric(
-                            subset.get("kg_turno_asfed_calc", 0.0), errors="coerce"
-                        ).fillna(0.0)
-                        subset["nro_cab"] = pd.to_numeric(
-                            subset.get("nro_cab", 0), errors="coerce"
-                        ).fillna(0).astype(int)
-                        cap_turno = float(
-                            mixers_df.loc[mixers_df["mixer_id"] == mixer_sel, "capacidad_kg"].fillna(0).max()
+                    subset = base_calc[
+                        (base_calc["tipo_racion"] == tipo_sel)
+                        & (base_calc["nombre_racion"] == racion_sel)
+                    ].copy()
+                    if subset.empty:
+                        st.info("No hay corrales asignados a esa combinación.")
+                        continue
+
+                    receta = recetas_por_nombre.get(str(racion_sel))
+                    if not receta:
+                        st.warning("No se encontró una receta para esta ración. Definila en 🧾 Ajustes de raciones.")
+                        continue
+
+                    subset["kg_turno_asfed_calc"] = pd.to_numeric(
+                        subset.get("kg_turno_asfed_calc", 0.0), errors="coerce"
+                    ).fillna(0.0)
+                    subset["nro_cab"] = pd.to_numeric(
+                        subset.get("nro_cab", 0), errors="coerce"
+                    ).fillna(0).astype(int)
+                    if "categ" in subset.columns:
+                        subset["categ"] = subset["categ"].fillna("")
+                    else:
+                        subset["categ"] = ""
+
+                    cap_turno = float(
+                        mixers_df.loc[mixers_df["mixer_id"] == mixer_sel, "capacidad_kg"].fillna(0).max()
+                    )
+
+                    kg_turno_base = float(subset["kg_turno_asfed_calc"].sum())
+                    if kg_turno_base <= 0 and cap_turno > 0:
+                        kg_turno_base = cap_turno
+
+                    ingredientes_objs: list[Ingredient] = []
+                    for ing in receta.get("ingredientes", []):
+                        dm_pct = float(pd.to_numeric(ing.get("MS", 100.0), errors="coerce") or 100.0)
+                        food = Food(
+                            name=str(ing.get("ORIGEN", "Ingrediente")),
+                            em=float(pd.to_numeric(ing.get("EM", 0.0), errors="coerce") or 0.0),
+                            pb=float(pd.to_numeric(ing.get("PB", 0.0), errors="coerce") or 0.0),
+                            dm=dm_pct,
+                        )
+                        ingredientes_objs.append(
+                            Ingredient(
+                                food=food,
+                                inclusion_pct=float(
+                                    pd.to_numeric(ing.get("inclusion_pct", 0.0), errors="coerce") or 0.0
+                                ),
+                            )
                         )
 
-                        kg_turno_total = float(subset["kg_turno_asfed_calc"].sum())
-                        kg_dia_total = kg_turno_total * float(turnos_val)
-                        over = kg_turno_total > cap_turno + 1e-6
-
-                        cols_metrics = st.columns(2)
-                        cols_metrics[0].metric("Kg por turno", f"{kg_turno_total:,.1f} kg")
-                        cols_metrics[1].metric("Kg totales/día", f"{kg_dia_total:,.1f} kg")
-                        if cap_turno > 0:
-                            if over:
-                                st.error(f"{tipo_sel} / {racion_sel}: {kg_turno_total:,.1f} kg por turno supera {cap_turno:,.0f} kg del mixer {mixer_sel}.")
-                            else:
-                                st.success(f"{tipo_sel} / {racion_sel}: {kg_turno_total:,.1f} kg por turno dentro de {cap_turno:,.0f} kg del mixer {mixer_sel}.")
-
-                        st.caption(f"Turnos programados: {int(turnos_val)}")
-
-                        def _categoria_val(row, categoria):
-                            cat = str(row.get("categ","")).strip().lower()
-                            if categoria=="va" and cat.startswith("va"): return row.get("nro_cab",0)
-                            if categoria=="nov" and cat.startswith("nov"): return row.get("nro_cab",0)
-                            return 0
-
-                        corrales_df = pd.DataFrame({
-                            "Corral": subset["nro_corral"],
-                            "kg por turno": subset["kg_turno_asfed_calc"].round(1),
-                            "vaquillonas": subset.apply(_categoria_val, categoria="va", axis=1),
-                            "novillos": subset.apply(_categoria_val, categoria="nov", axis=1),
-                        })
-                        corrales_df["vaquillonas"] = pd.to_numeric(
-                            corrales_df["vaquillonas"], errors="coerce"
-                        ).fillna(0).astype(int)
-                        corrales_df["novillos"] = pd.to_numeric(
-                            corrales_df["novillos"], errors="coerce"
-                        ).fillna(0).astype(int)
-                        resumen = {
-                            "Corral": "Total",
-                            "kg por turno": round(corrales_df["kg por turno"].sum(), 1),
-                            "vaquillonas": int(corrales_df["vaquillonas"].sum()),
-                            "novillos": int(corrales_df["novillos"].sum()),
+                    carga_turno_inicial = mixer_kg_by_ingredient(ingredientes_objs, kg_turno_base)
+                    carga_df = pd.DataFrame(
+                        {
+                            "Ingrediente": list(carga_turno_inicial.keys()),
+                            "kg_totales_dia": [
+                                val * float(turnos_val) for val in carga_turno_inicial.values()
+                            ],
                         }
-                        corrales_df = pd.concat([corrales_df, pd.DataFrame([resumen])], ignore_index=True)
-                        st.dataframe(corrales_df, use_container_width=True, hide_index=True)
+                    )
 
-                        st.download_button(
-                            f"⬇️ Exportar plan (Descarga {slot})",
-                            data=corrales_df.to_csv(index=False).encode("utf-8"),
-                            file_name=f"plan_descarga{slot}_{tipo_sel}_{racion_sel}_{mixer_sel}.csv",
-                            mime="text/csv",
-                            key=f"download_plan_{slot}",
+                    if carga_df.empty:
+                        st.warning("No hay ingredientes con inclusión > 0 en la receta seleccionada.")
+                        continue
+
+                    carga_df["kg_totales_dia"] = carga_df["kg_totales_dia"].round(1)
+                    carga_df["kg_por_turno"] = (carga_df["kg_totales_dia"] / float(turnos_val)).round(1)
+
+                    editor_df = st.data_editor(
+                        carga_df,
+                        hide_index=True,
+                        key=f"carga_editor_{slot}_{racion_sel}",
+                        num_rows="fixed",
+                        column_config={
+                            "Ingrediente": st.column_config.TextColumn("Ingrediente", disabled=True),
+                            "kg_totales_dia": st.column_config.NumberColumn(
+                                "kg totales * día", format="%.1f"
+                            ),
+                            "kg_por_turno": st.column_config.NumberColumn(
+                                "kg * turno", format="%.1f", disabled=True
+                            ),
+                        },
+                        use_container_width=True,
+                    )
+
+                    editor_df = editor_df.copy()
+                    editor_df["kg_totales_dia"] = pd.to_numeric(
+                        editor_df["kg_totales_dia"], errors="coerce"
+                    ).fillna(0.0)
+                    editor_df["kg_por_turno"] = (
+                        editor_df["kg_totales_dia"] / float(turnos_val)
+                    ).round(1)
+                    editor_df["kg_totales_dia"] = editor_df["kg_totales_dia"].round(1)
+
+                    total_turno = float(editor_df["kg_por_turno"].sum())
+                    total_dia = float(editor_df["kg_totales_dia"].sum())
+
+                    st.markdown(
+                        f"**Totales** · Día: {total_dia:,.1f} kg · Turno: {total_turno:,.1f} kg"
+                    )
+
+                    if cap_turno > 0:
+                        diff_pct = abs(total_turno - cap_turno) / cap_turno if cap_turno else 0.0
+                        if diff_pct <= 0.005:
+                            st.success(
+                                f"{tipo_sel} / {racion_sel}: {total_turno:,.1f} kg por turno dentro de {cap_turno:,.0f} kg del mixer {mixer_sel}."
+                            )
+                        elif total_turno > cap_turno:
+                            st.error(
+                                f"{tipo_sel} / {racion_sel}: {total_turno:,.1f} kg por turno supera {cap_turno:,.0f} kg del mixer {mixer_sel}."
+                            )
+                        else:
+                            st.warning(
+                                f"El total calculado ({total_turno:,.1f} kg) difiere del total del mixer ({cap_turno:,.1f} kg)."
+                            )
+
+                    if cap_turno > 0:
+                        resumen_capacidad = (
+                            f"{total_turno:,.1f} kg por turno dentro de {cap_turno:,.1f} kg del mixer {mixer_sel}."
                         )
                     else:
-                        st.caption("Seleccioná mixer, tipo y ración para generar el plan de esta descarga.")
-            else:
-                st.info("Configura tipos de ración en la base para generar el plan del mixer.")
+                        resumen_capacidad = (
+                            f"{total_turno:,.1f} kg por turno — definí capacidad para {mixer_sel} en ⚙️ Parámetros."
+                        )
+                    st.caption(f"{tipo_sel} / {racion_sel}: {resumen_capacidad}")
 
-        st.markdown("---")
-        total_kg = st.number_input("Total del mixer (kg, as-fed)", 0.0, 50000.0, 5000.0, step=10.0)
+                    st.caption(
+                        f"Turnos programados: {int(turnos_val)} — Total diario: {total_dia:,.1f} kg"
+                    )
 
-        raciones = build_raciones_from_recipes()
-        if not raciones:
-            st.info("Definí recetas en la pestaña 🧾 Ajustes de raciones.")
-        else:
-            pick = st.selectbox("Ración a usar", [r["nombre"] for r in raciones])
-            ra = next(r for r in raciones if r["nombre"] == pick)
+                    peso_referencia = subset["kg_turno_asfed_calc"]
+                    if peso_referencia.sum() <= 0:
+                        peso_referencia = subset["nro_cab"].astype(float)
+                    if peso_referencia.sum() <= 0:
+                        peso_referencia = pd.Series([1.0] * len(subset), index=subset.index)
 
-            ings = []
-            for x in ra["ingredientes"]:
-                dm_pct = float(pd.to_numeric(x.get("MS", 100.0), errors="coerce") or 100.0)
-                food = Food(
-                    name=str(x.get("ORIGEN","Ingrediente")),
-                    em=float(pd.to_numeric(x.get("EM", 0.0), errors="coerce") or 0.0),
-                    pb=float(pd.to_numeric(x.get("PB", 0.0), errors="coerce") or 0.0),
-                    dm=dm_pct,
-                )
-                ings.append( Ingredient(food=food, inclusion_pct=float(pd.to_numeric(x.get("inclusion_pct", 0.0), errors="coerce") or 0.0)) )
+                    total_peso = float(peso_referencia.sum()) or 1.0
+                    subset["kg_corral_turno"] = (total_turno * (peso_referencia / total_peso)).round(1)
+                    subset["kg_corral_dia"] = (subset["kg_corral_turno"] * float(turnos_val)).round(1)
 
-            if st.button("Calcular plan de carga", type="primary"):
-                plan = mixer_kg_by_ingredient(ings, total_kg)
-                if plan:
-                    df_plan = pd.DataFrame({"Ingrediente": list(plan.keys()), "Kg (as-fed)": list(plan.values())})
-                    st.dataframe(df_plan, use_container_width=True)
-                    st.caption(f"Total calculado: {sum(plan.values()):.1f} kg (debería ≈ {total_kg:.1f} kg)")
-                    st.toast("Plan de carga generado.", icon="✅")
-                else:
-                    st.warning("No hay ingredientes con inclusión > 0 o el total del mixer es 0.")
+                    def _categoria_val(row, prefijos):
+                        cat = str(row.get("categ", "")).strip().lower()
+                        for pref in prefijos:
+                            if cat.startswith(pref):
+                                return int(row.get("nro_cab", 0))
+                        return 0
+
+                    corrales_df = pd.DataFrame(
+                        {
+                            "Corral": pd.to_numeric(
+                                subset["nro_corral"], errors="coerce"
+                            ).fillna(0).astype(int),
+                            "kg/CORRAL": subset["kg_corral_turno"],
+                            "kg totales * día": subset["kg_corral_dia"],
+                            "vaquillonas": subset.apply(
+                                lambda r: _categoria_val(r, ("va",)), axis=1
+                            ),
+                            "novillos": subset.apply(
+                                lambda r: _categoria_val(r, ("nov",)), axis=1
+                            ),
+                        }
+                    )
+
+                    resumen = pd.DataFrame(
+                        [
+                            {
+                                "Corral": "Total",
+                                "kg/CORRAL": round(corrales_df["kg/CORRAL"].sum(), 1),
+                                "kg totales * día": round(
+                                    corrales_df["kg totales * día"].sum(), 1
+                                ),
+                                "vaquillonas": int(corrales_df["vaquillonas"].sum()),
+                                "novillos": int(corrales_df["novillos"].sum()),
+                            }
+                        ]
+                    )
+                    corrales_show = pd.concat([corrales_df, resumen], ignore_index=True)
+                    st.dataframe(corrales_show, use_container_width=True, hide_index=True)
+
+                    st.caption(
+                        f"Turnos programados: {int(turnos_val)} — Total mixer: {total_turno * float(turnos_val):,.1f} kg"
+                    )
+
+                    fecha_str = (
+                        fecha_plan.strftime("%Y-%m-%d")
+                        if hasattr(fecha_plan, "strftime")
+                        else str(fecha_plan)
+                    )
+
+                    export_rows = []
+                    for _, row in editor_df.iterrows():
+                        export_rows.append(
+                            {
+                                "fecha": fecha_str,
+                                "mixer_id": mixer_sel,
+                                "tipo_racion": tipo_sel,
+                                "racion": racion_sel,
+                                "turno": int(turnos_val),
+                                "ingrediente": row["Ingrediente"],
+                                "kg_turno": float(row["kg_por_turno"]),
+                                "kg_total_dia": float(row["kg_totales_dia"]),
+                                "corral": "",
+                                "kg_corral": 0.0,
+                                "categoria": "",
+                            }
+                        )
+
+                    for _, row in subset.iterrows():
+                        export_rows.append(
+                            {
+                                "fecha": fecha_str,
+                                "mixer_id": mixer_sel,
+                                "tipo_racion": tipo_sel,
+                                "racion": racion_sel,
+                                "turno": int(turnos_val),
+                                "ingrediente": "",
+                                "kg_turno": float(row["kg_corral_turno"]),
+                                "kg_total_dia": float(row["kg_corral_dia"]),
+                                "corral": int(row.get("nro_corral", 0)),
+                                "kg_corral": float(row["kg_corral_turno"]),
+                                "categoria": str(row.get("categ", "")),
+                            }
+                        )
+
+                    export_df = pd.DataFrame(export_rows)
+                    plan_exports.append(export_df)
+
+                    file_name = (
+                        f"plan_mixer{slot}_{racion_sel}_{fecha_str}.csv".replace(" ", "_")
+                    )
+                    st.download_button(
+                        f"⬇️ Exportar plan (Descarga {slot})",
+                        data=export_df.to_csv(index=False).encode("utf-8"),
+                        file_name=file_name,
+                        mime="text/csv",
+                        key=f"download_plan_{slot}",
+                    )
+
+        if plan_exports:
+            consolidado = pd.concat(plan_exports, ignore_index=True)
+            fecha_str = fecha_plan.strftime("%Y-%m-%d") if hasattr(fecha_plan, "strftime") else str(fecha_plan)
+            st.markdown("---")
+            st.download_button(
+                "⬇️ Exportar plan consolidado (CSV)",
+                data=consolidado.to_csv(index=False).encode("utf-8"),
+                file_name=f"plan_mixers_consolidado_{fecha_str}.csv",
+                mime="text/csv",
+                type="primary",
+                key="download_plan_consolidado",
+            )
 
 # ------------------------------------------------------------------------------
 # ⬇️ Exportar
