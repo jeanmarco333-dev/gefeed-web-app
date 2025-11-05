@@ -16,7 +16,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from calc_engine import Food, Ingredient, mixer_kg_by_ingredient
+from calc_engine import (
+    Food,
+    Ingredient,
+    mixer_kg_by_ingredient,
+    ration_split_from_pv_cv,
+)
 # --- AUTH (login por usuario/clave) ---
 import yaml
 import streamlit_authenticator as stauth
@@ -1533,6 +1538,98 @@ with tab_raciones:
                     "pct_ms":[0.0]*faltan
                 })], ignore_index=True)
 
+            pv_catalog = 0.0
+            cv_catalog = 0.0
+            if "pv_kg" in cat.columns:
+                vals = pd.to_numeric(cat.loc[cat["id"] == rid, "pv_kg"], errors="coerce").dropna()
+                if not vals.empty:
+                    pv_catalog = float(vals.iloc[0])
+            if "cv_pct" in cat.columns:
+                vals = pd.to_numeric(cat.loc[cat["id"] == rid, "cv_pct"], errors="coerce").dropna()
+                if not vals.empty:
+                    cv_catalog = float(vals.iloc[0])
+
+            corrales_df = load_base()
+            corral_choices = ["(sin corral)"]
+            corral_lookup: dict[str, pd.Series | None] = {"(sin corral)": None}
+            if not corrales_df.empty:
+                work = corrales_df.copy()
+                work.columns = [str(c).strip().lower() for c in work.columns]
+                if "nombre_racion" in work.columns:
+                    work["nombre_racion"] = work["nombre_racion"].fillna("").astype(str)
+                    subset = work[
+                        work["nombre_racion"].str.strip().str.lower()
+                        == pick.strip().lower()
+                    ].copy()
+                    if not subset.empty and "nro_corral" in subset.columns:
+                        subset["nro_corral"] = pd.to_numeric(
+                            subset["nro_corral"], errors="coerce"
+                        ).fillna(0).astype(int)
+                        subset = subset[subset["nro_corral"] > 0]
+                        subset = subset.drop_duplicates("nro_corral", keep="last")
+                        subset = subset.sort_values("nro_corral")
+                        for _, crow in subset.iterrows():
+                            nro = int(crow["nro_corral"])
+                            cabezas = int(_num(crow.get("nro_cab", 0), 0.0))
+                            label = f"Corral {nro}"
+                            if cabezas > 0:
+                                label += f" ({cabezas} cab)"
+                            corral_choices.append(label)
+                            corral_lookup[label] = crow
+
+            corral_choice_key = f"ration_corral_{rid}"
+            if (
+                corral_choice_key not in st.session_state
+                or st.session_state[corral_choice_key] not in corral_choices
+            ):
+                st.session_state[corral_choice_key] = corral_choices[0]
+
+            pv_key = f"ration_pv_{rid}"
+            cv_key = f"ration_cv_{rid}"
+            prev_corral_key = f"{corral_choice_key}_last"
+
+            params_cols = st.columns([2.2, 1.1, 1.1, 1.1])
+            selected_corral_label = params_cols[0].selectbox(
+                "Corral (opcional)",
+                corral_choices,
+                key=corral_choice_key,
+            )
+            selected_corral = corral_lookup.get(selected_corral_label)
+            base_pv = pv_catalog
+            base_cv = cv_catalog
+            if selected_corral is not None:
+                base_pv = _num(selected_corral.get("pv_kg"), pv_catalog)
+                base_cv = _num(selected_corral.get("cv_pct"), cv_catalog)
+
+            if pv_key not in st.session_state:
+                st.session_state[pv_key] = base_pv
+            if cv_key not in st.session_state:
+                st.session_state[cv_key] = base_cv
+
+            if st.session_state.get(prev_corral_key) != selected_corral_label:
+                st.session_state[pv_key] = base_pv
+                st.session_state[cv_key] = base_cv
+                st.session_state[prev_corral_key] = selected_corral_label
+
+            pv_value = params_cols[1].number_input(
+                "PV (kg)",
+                min_value=0.0,
+                max_value=1500.0,
+                value=float(st.session_state[pv_key]),
+                step=1.0,
+                key=pv_key,
+            )
+            cv_value = params_cols[2].number_input(
+                "CV (%)",
+                min_value=0.0,
+                max_value=20.0,
+                value=float(st.session_state[cv_key]),
+                step=0.1,
+                key=cv_key,
+            )
+            consumo_ms = pv_value * (cv_value / 100.0)
+            params_cols[3].metric("CV MS (kg)", f"{consumo_ms:.2f}")
+
             colcfg = {
                 "ingrediente": st.column_config.SelectboxColumn("Ingrediente (ORIGEN)", options=opciones_ingred),
                 "pct_ms": st.column_config.NumberColumn("% inclusión (MS)", min_value=0.0, max_value=100.0, step=0.1)
@@ -1586,24 +1683,121 @@ with tab_raciones:
                 st.toast("Receta 100% MS guardada.", icon="✅")
                 rerun_with_cache_reset()
 
-            st.markdown("#### Vista previa (MS ponderada y factor as-fed)")
-            df_view = grid_rec.copy()
-            df_view = df_view[df_view["ingrediente"].astype(str).str.strip()!=""]
-            if not df_view.empty:
-                df_view = df_view.merge(
-                    alimentos_norm[["ORIGEN","MS"]],
-                    left_on="ingrediente",
-                    right_on="ORIGEN",
-                    how="left",
+            calc_ready = ok100 and consumo_ms > 0 and not ingredientes_nonempty.empty
+            if not ok100:
+                st.warning("La ración debe sumar 100% MS (±0,5) para calcular el reparto diario.")
+            if consumo_ms <= 0:
+                st.info("Ingresá PV y CV mayores a 0 para estimar consumos y nutrientes.")
+
+            if calc_ready:
+                resultado = ration_split_from_pv_cv(grid_rec, alimentos_norm, pv_value, cv_value)
+                detail_df = pd.DataFrame(resultado.get("detalle", []))
+
+                st.markdown("#### Métricas diarias de la ración")
+                metrics_cols = st.columns(5)
+                metrics_cols[0].metric("CV MS (kg)", f"{resultado['Consumo_MS_dia']:.2f}")
+                metrics_cols[1].metric(
+                    "Tal cual total (kg/día)", f"{resultado['asfed_total_kg_dia']:.2f}"
                 )
-                df_view = df_view.rename(columns={"MS":"MS_%"}).drop(columns=["ORIGEN"])
-                df_view["MS_frac"] = pd.to_numeric(df_view["MS_%"], errors="coerce").fillna(100.0)/100.0
-                w_ms = (df_view["pct_ms"]/100.0 * df_view["MS_frac"]).sum()
-                w_ms = float(w_ms) if w_ms>0 else 1.0
-                factor_asfed = 1.0 / w_ms
-                m1, m2 = st.columns(2)
-                m1.metric("MS ponderada", f"{w_ms*100:.1f} %")
-                m2.metric("Factor as-fed", f"×{factor_asfed:.3f}")
-                st.dataframe(df_view[["ingrediente","pct_ms","MS_%"]], use_container_width=True)
+                metrics_cols[2].metric("EM total (Mcal/día)", f"{resultado['EM_Mcal_dia']:.2f}")
+                metrics_cols[3].metric("PB total (g/día)", f"{resultado['PB_g_dia']:.0f}")
+                metrics_cols[4].metric("Costo/día", f"$ {resultado['costo_dia']:.2f}")
+
+                if detail_df.empty:
+                    st.info("Definí inclusiones (> 0% MS) para ver el detalle por ingrediente.")
+                else:
+                    def _alertas(row):
+                        flags = []
+                        if bool(row.get("missing_ms")):
+                            flags.append("MS")
+                        if bool(row.get("missing_em")):
+                            flags.append("EM")
+                        if bool(row.get("missing_pb")):
+                            flags.append("PB")
+                        if bool(row.get("missing_precio")):
+                            flags.append("Precio")
+                        return "⚠️ " + ", ".join(flags) if flags else ""
+
+                    detail_df["Alertas"] = detail_df.apply(_alertas, axis=1)
+                    display_df = detail_df[
+                        [
+                            "ingrediente",
+                            "pct_ms",
+                            "MS_kg",
+                            "MS_%_alimento",
+                            "asfed_kg",
+                            "EM_Mcal",
+                            "PB_g",
+                            "precio",
+                            "costo_dia",
+                            "Alertas",
+                        ]
+                    ].rename(
+                        columns={
+                            "ingrediente": "Ingrediente",
+                            "pct_ms": "%MS",
+                            "MS_kg": "MS kg/día",
+                            "MS_%_alimento": "MS % alimento",
+                            "asfed_kg": "Tal cual kg/día",
+                            "EM_Mcal": "EM Mcal/día",
+                            "PB_g": "PB g/día",
+                            "precio": "$ /kg (tal cual)",
+                            "costo_dia": "$ /día",
+                        }
+                    )
+
+                    column_config = {
+                        "%MS": st.column_config.NumberColumn("%MS", format="%.2f"),
+                        "MS kg/día": st.column_config.NumberColumn("MS kg/día", format="%.3f"),
+                        "MS % alimento": st.column_config.NumberColumn("MS % alimento", format="%.1f"),
+                        "Tal cual kg/día": st.column_config.NumberColumn("Tal cual kg/día", format="%.3f"),
+                        "EM Mcal/día": st.column_config.NumberColumn("EM Mcal/día", format="%.3f"),
+                        "PB g/día": st.column_config.NumberColumn("PB g/día", format="%.0f"),
+                        "$ /kg (tal cual)": st.column_config.NumberColumn("$/kg (tal cual)", format="$ %.2f"),
+                        "$ /día": st.column_config.NumberColumn("$/día", format="$ %.2f"),
+                        "Alertas": st.column_config.TextColumn("Alertas"),
+                    }
+
+                    st.dataframe(
+                        display_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=column_config,
+                    )
+
+                    if (display_df["Alertas"].str.len() > 0).any():
+                        st.caption(
+                            "⚠️ Revisá los ingredientes con datos incompletos en el catálogo de alimentos."
+                        )
+
+                    export_buffer = io.StringIO()
+                    display_df.to_csv(export_buffer, index=False)
+                    export_buffer.write("\n")
+                    resumen = pd.DataFrame(
+                        [
+                            {"Métrica": "Ración", "Valor": pick},
+                            {"Métrica": "Corral", "Valor": selected_corral_label},
+                            {"Métrica": "PV (kg)", "Valor": pv_value},
+                            {"Métrica": "CV (%)", "Valor": cv_value},
+                            {
+                                "Métrica": "Consumo MS (kg/día)",
+                                "Valor": resultado["Consumo_MS_dia"],
+                            },
+                            {
+                                "Métrica": "Tal cual total (kg/día)",
+                                "Valor": resultado["asfed_total_kg_dia"],
+                            },
+                            {"Métrica": "EM total (Mcal/día)", "Valor": resultado["EM_Mcal_dia"]},
+                            {"Métrica": "PB total (g/día)", "Valor": resultado["PB_g_dia"]},
+                            {"Métrica": "Costo/día", "Valor": resultado["costo_dia"]},
+                        ]
+                    )
+                    resumen.to_csv(export_buffer, index=False)
+                    st.download_button(
+                        "⬇️ Exportar cálculo (CSV)",
+                        data=export_buffer.getvalue().encode("utf-8"),
+                        file_name=f"racion_{rid}_calculo.csv",
+                        mime="text/csv",
+                    )
             else:
-                st.info("Agregá ingredientes para ver la MS ponderada.")
+                st.info("Completá la ración (100% MS) para ver el reparto diario de MS, EM y PB.")
