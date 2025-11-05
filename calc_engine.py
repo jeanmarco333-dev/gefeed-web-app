@@ -103,7 +103,7 @@ def ration_split_from_pv_cv(
             nombre = str(row.get("ORIGEN", "")).strip()
             if not nombre:
                 continue
-            lookup[nombre.lower()] = row.to_dict()
+            lookup[nombre.lower()] = row
 
     total_pct = ingredientes["pct_ms"].sum() or 1.0
 
@@ -115,7 +115,7 @@ def ration_split_from_pv_cv(
         pct_ms = float(row["pct_ms"])
         inclusion = pct_ms / total_pct
 
-        ref = lookup.get(nombre.lower(), {})
+        ref = lookup.get(nombre.lower()) or {}
 
         ms_pct = _safe_float(ref.get("MS", 0.0))
         ms_frac = ms_pct / 100.0 if ms_pct > 0 else 0.0
