@@ -36,7 +36,7 @@ AUTH_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_STORE = AUTH_DIR / "users.yaml"  # acá persistimos los usuarios editados por UI
 
 # --- Columnas base (constantes) ---
-ALIM_COLS = [
+EXPECTED_ALIM_COLS = [
     "ORIGEN",
     "PRESENTACION",
     "TIPO",
@@ -49,6 +49,8 @@ ALIM_COLS = [
     "EM",
     "ENP2",
 ]
+
+ALIM_COLS = list(EXPECTED_ALIM_COLS)
 
 REQENER_COLS = ["peso", "cat", "requerimiento_energetico", "ap"]
 REQPROT_COLS = ["peso", "cat", "ap", "req_proteico"]
@@ -298,45 +300,158 @@ def rerun_with_cache_reset():
 # ------------------------------------------------------------------------------
 # Normalización de alimentos
 # ------------------------------------------------------------------------------
-def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+ALIM_NUMERIC_COLS = ["MS", "TND (%)", "PB", "EE", "COEF ATC", "$/KG", "EM", "ENP2"]
+ALIM_TEXT_COLS = ["ORIGEN", "PRESENTACION", "TIPO"]
+
+ALIM_COLUMN_ALIASES = {
+    "presentacion": "PRESENTACION",
+    "origen": "ORIGEN",
+    "descripcion": "PRESENTACION",
+    "nombre": "ORIGEN",
+    "tipo": "TIPO",
+    "tipo para despues generar informe": "TIPO",
+    "ms": "MS",
+    "%ms": "MS",
+    "m.s.": "MS",
+    "ms (%)": "MS",
+    "tnd": "TND (%)",
+    "tnd (%)": "TND (%)",
+    "tnd%": "TND (%)",
+    "tnd(%)": "TND (%)",
+    "pb": "PB",
+    "%pb": "PB",
+    "ee": "EE",
+    "%ee": "EE",
+    "coef atc": "COEF ATC",
+    "coefatc": "COEF ATC",
+    "coef. atc": "COEF ATC",
+    "precio": "$/KG",
+    "precio/kilo": "$/KG",
+    "precio/kg": "$/KG",
+    "precio x kg": "$/KG",
+    "$xkg": "$/KG",
+    "$ / kg": "$/KG",
+    "$": "$/KG",
+    "$kg": "$/KG",
+    "$ x kg": "$/KG",
+    "$/kg": "$/KG",
+    "costo": "$/KG",
+    "costo/kg": "$/KG",
+    "precio (para calcula consto de la racion por cab)": "$/KG",
+    "precio (para calcula costo de la racion por cab)": "$/KG",
+    "costo (para calcula consto de la racion por cab)": "$/KG",
+    "costo (para calcula costo de la racion por cab)": "$/KG",
+    "em": "EM",
+    "energía metabolizable": "EM",
+    "energia metabolizable": "EM",
+    "enp2": "ENP2",
+    "enp": "ENP_ALT",
+}
+
+
+def _clean_header(name: str) -> str:
+    base = str(name or "").strip().replace("\ufeff", "")
+    normalized = (
+        base.lower()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+    return normalized
+
+
+def _clean_numeric(value, default: float = 0.0) -> float:
+    if pd.isna(value):
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    text = (
+        text.replace("\u00A0", " ")
+        .replace("$", "")
+        .replace("%", "")
+        .replace(" ", "")
+        .replace(",", ".")
+    )
+    try:
+        return float(text)
+    except Exception:
+        return default
+
+
+def normalize_alimentos(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        out = pd.DataFrame(columns=EXPECTED_ALIM_COLS)
+        out.attrs["discarded_rows"] = 0
+        return out
+
+    working = df.copy()
+
     rename_map = {}
-    for c in list(df.columns):
-        c2 = str(c).strip().replace("\ufeff","")
-        c2u = (c2.upper().replace("Á","A").replace("É","E").replace("Í","I").replace("Ó","O").replace("Ú","U"))
-        if c2u == "ORIGEN": rename_map[c] = "ORIGEN"
-        elif c2u.strip() == "PRESENTACION": rename_map[c] = "PRESENTACION"
-        elif c2u == "TIPO": rename_map[c] = "TIPO"
-        elif c2u in ("MS","%MS","M.S."): rename_map[c] = "MS"
-        elif c2u in ("TND","TND (%)","TND%","TND(%)"): rename_map[c] = "TND (%)"
-        elif c2u in ("PB","%PB"): rename_map[c] = "PB"
-        elif c2u in ("EE","%EE"): rename_map[c] = "EE"
-        elif c2u in ("COEF ATC","COEFATC"): rename_map[c] = "COEF ATC"
-        elif c2u in ("$/KG","PRECIO","PRECIO/KG","$XKG","PRECIO X KG"): rename_map[c] = "$/KG"
-        elif c2u == "EM": rename_map[c] = "EM"
-        elif c2u in ("ENP2","ENP"): rename_map[c] = "ENP2"
-    df = df.rename(columns=rename_map)
-    for col in ALIM_COLS:
-        if col not in df.columns: df[col] = None
-    df = df[ALIM_COLS]
+    for original in list(working.columns):
+        key = _clean_header(original)
+        target = ALIM_COLUMN_ALIASES.get(key)
+        if target:
+            rename_map[original] = target
 
-    def _to_num(x, default=0.0):
-        if pd.isna(x): return default
-        s = str(x).strip()
-        if not s: return default
-        s = s.replace("\u00A0"," ").replace(" ","").replace("$","").replace("%","").replace(",", ".")
-        try: return float(s)
-        except: return default
+    working = working.rename(columns=rename_map)
 
-    for c in ["MS","TND (%)","PB","EE","COEF ATC","$/KG","EM","ENP2"]:
-        df[c] = df[c].map(lambda v: _to_num(v, 0.0))
+    recognized = [col for col in working.columns if col in EXPECTED_ALIM_COLS or col == "ENP_ALT"]
+    if not recognized:
+        raise ValueError("Archivo sin columnas reconocibles")
 
-    df.loc[df["MS"] <= 1.0, "MS"] = df.loc[df["MS"] <= 1.0, "MS"] * 100.0
-    if (df["TND (%)"] <= 1.0).any() and (df["TND (%)"] > 0).any():
-        df.loc[df["TND (%)"] <= 1.0, "TND (%)"] = df.loc[df["TND (%)"] <= 1.0, "TND (%)"] * 100.0
+    has_origen = "ORIGEN" in working.columns
+    has_presentacion = "PRESENTACION" in working.columns
+    if not has_origen and has_presentacion:
+        working["ORIGEN"] = working["PRESENTACION"]
+        has_origen = True
+    if not has_presentacion and has_origen:
+        working["PRESENTACION"] = working["ORIGEN"]
+        has_presentacion = True
 
-    for c in ["ORIGEN","PRESENTACION","TIPO"]:
-        df[c] = df[c].fillna("").astype(str).str.strip()
-    return df
+    for col in EXPECTED_ALIM_COLS + ["ENP_ALT"]:
+        if col not in working.columns:
+            if col in ALIM_TEXT_COLS:
+                working[col] = ""
+            elif col == "ENP_ALT":
+                working[col] = 0.0
+            else:
+                working[col] = 0.0
+
+    for col in ALIM_TEXT_COLS:
+        working[col] = working[col].fillna("").astype(str).str.strip()
+
+    for col in ALIM_NUMERIC_COLS + ["ENP_ALT"]:
+        working[col] = working[col].map(lambda v: _clean_numeric(v, 0.0))
+
+    enp_alt = working.get("ENP_ALT")
+    if enp_alt is not None:
+        mask = working["ENP2"].isna() | (working["ENP2"] == 0)
+        working.loc[mask, "ENP2"] = enp_alt[mask]
+        working = working.drop(columns=["ENP_ALT"])
+
+    ms_mask = (working["MS"] > 0) & (working["MS"] <= 1.0)
+    working.loc[ms_mask, "MS"] = working.loc[ms_mask, "MS"] * 100.0
+
+    tnd_mask = (working["TND (%)"] > 0) & (working["TND (%)"] <= 1.0)
+    working.loc[tnd_mask, "TND (%)"] = working.loc[tnd_mask, "TND (%)"] * 100.0
+
+    before_drop = len(working)
+    working = working[working["ORIGEN"].astype(str).str.strip() != ""]
+    discarded = before_drop - len(working)
+
+    if not working.empty:
+        working = working.drop_duplicates(subset=["ORIGEN"], keep="last")
+
+    working = working[EXPECTED_ALIM_COLS].reset_index(drop=True)
+    working.attrs["discarded_rows"] = max(discarded, 0)
+    return working
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return normalize_alimentos(df)
 
 # ------------------------------------------------------------------------------
 # IO helpers (cache)
@@ -804,6 +919,45 @@ with tab_alimentos:
             rerun_with_cache_reset()
 
         alimentos_df = load_alimentos()
+
+        with dropdown("📥 Importar planilla de alimentos"):
+            uploaded = st.file_uploader(
+                "Subí tu planilla (.xlsx, .xls, .csv)",
+                type=["xlsx", "xls", "csv"],
+                key="alimentos_import_file",
+            )
+            if uploaded is not None:
+                try:
+                    uploaded.seek(0)
+                    if uploaded.name.lower().endswith((".xlsx", ".xls")):
+                        raw_df = pd.read_excel(uploaded)
+                    else:
+                        uploaded.seek(0)
+                        raw_df = pd.read_csv(uploaded, encoding="utf-8-sig")
+                except Exception as exc:
+                    st.error(f"No se pudo leer el archivo: {exc}")
+                else:
+                    try:
+                        df_norm = normalize_alimentos(raw_df)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.dataframe(df_norm.head(20), use_container_width=True)
+                        st.caption(f"Filas: {len(df_norm)} — Columnas: {len(df_norm.columns)}")
+                        dropped = int(df_norm.attrs.get("discarded_rows", 0))
+                        if dropped > 0:
+                            st.warning(f"Se descartaron {dropped} filas sin ORIGEN válido.")
+
+                        if st.button(
+                            "💾 Cargar y reemplazar catálogo actual",
+                            type="primary",
+                            key="import_replace_alimentos",
+                        ):
+                            save_alimentos(df_norm)
+                            st.success("Catálogo actualizado y guardado.")
+                            st.toast("Alimentos cargados correctamente.", icon="🧾")
+                            rerun_with_cache_reset()
+
         with dropdown("Filtros avanzados"):
             c1, c2, c3 = st.columns(3)
             with c1: q = st.text_input("🔎 Buscar (ORIGEN contiene)", placeholder="maíz, afrechillo…")
