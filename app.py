@@ -11,9 +11,11 @@ import io
 import json
 import os
 import zipfile
+import hashlib
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from textwrap import dedent
 
 import pandas as pd
 import streamlit as st
@@ -38,7 +40,7 @@ GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
 GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Config de ADMIN y almacenamiento de usuarios editables ---
-ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administración
+DEFAULT_ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administración por defecto
 
 AUTH_DIR = GLOBAL_DATA_DIR / "auth"
 AUTH_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,6 +177,29 @@ BASE_CFG = load_base_cfg()
 STORE_CFG = load_user_store()
 CFG = merge_credentials(BASE_CFG, STORE_CFG)
 
+# --- Detección de rol administrador --------------------------------------------------
+
+def is_admin(username: str) -> bool:
+    """Determina si un usuario tiene permisos de administrador."""
+
+    user = str(username)
+    admin_candidates: set[str] = set()
+    try:
+        admin_candidates = {str(u) for u in st.secrets.get("admins", [])}
+    except Exception:
+        admin_candidates = set()
+
+    if admin_candidates:
+        return user in admin_candidates
+
+    roles_cfg = CFG.get("roles")
+    if isinstance(roles_cfg, dict):
+        role = roles_cfg.get(user)
+        if isinstance(role, str) and role.strip().lower() == "admin":
+            return True
+
+    return user in DEFAULT_ADMIN_USERS
+
 # --- Crear Authenticate con ARGUMENTOS POSICIONALES (compat 0.3.2) ---
 # Validaciones mínimas:
 creds = CFG.get("credentials") or {}
@@ -227,6 +252,8 @@ user_profile = {}
 credentials_cfg = (CFG.get("credentials") or {}).get("usernames", {})
 if isinstance(credentials_cfg, dict):
     user_profile = credentials_cfg.get(username, {}) or {}
+
+USER_IS_ADMIN = is_admin(username)
 
 user_email = str(user_profile.get("email", "") or "").strip()
 if user_email:
@@ -435,6 +462,10 @@ def user_path(fname: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
+META_DIR = USER_DIR / "meta"
+META_DIR.mkdir(parents=True, exist_ok=True)
+LAST_CHANGED = META_DIR / "last_changed.json"
+
 ALIM_PATH    = user_path("alimentos.csv")
 BASE_PATH    = user_path("raciones_base.csv")
 MIXERS_PATH  = user_path("mixers.csv")
@@ -448,6 +479,156 @@ AUDIT_LOG_PATH = user_path("audit_log.csv")
 MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+
+def mark_changed(event: str, username: str):
+    """Marca el último cambio persistido por el usuario autenticado."""
+
+    payload = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "event": str(event),
+        "username": str(username),
+        "app_version": APP_VERSION,
+    }
+    try:
+        LAST_CHANGED.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[META] No se pudo actualizar last_changed: {exc}", flush=True)
+
+
+def _hash_app_version() -> str:
+    """Genera un hash corto basado en archivos críticos de la app."""
+
+    hasher = hashlib.sha256()
+    for path_name in ["app.py", "calc_engine.py", "requirements.txt"]:
+        try:
+            hasher.update(Path(path_name).read_bytes())
+        except Exception:
+            continue
+    return hasher.hexdigest()[:10]
+
+
+def _read_last_changed_payload():
+    if LAST_CHANGED.exists():
+        try:
+            return json.loads(LAST_CHANGED.read_text(encoding="utf-8"))
+        except Exception:
+            try:
+                return LAST_CHANGED.read_text(encoding="utf-8").strip()
+            except Exception:
+                return None
+    return None
+
+
+def build_methodology_doc() -> tuple[str, dict]:
+    """Genera el markdown de metodología y los metadatos de auditoría."""
+
+    alim = load_alimentos()
+    rec = load_recipes()
+    cat = load_catalog()
+    base = load_base()
+    reqE = load_reqener()
+    reqP = load_reqprot()
+
+    resumen_tablas = {
+        "alimentos": [str(c) for c in alim.columns],
+        "recetas": [str(c) for c in rec.columns],
+        "catalogo": [str(c) for c in cat.columns],
+        "base": [str(c) for c in base.columns],
+        "req_energetico": [str(c) for c in reqE.columns],
+        "req_proteico": [str(c) for c in reqP.columns],
+    }
+
+    build_hash = _hash_app_version()
+    last_changed_payload = _read_last_changed_payload()
+    if isinstance(last_changed_payload, dict):
+        last_changed_display = json.dumps(
+            last_changed_payload, ensure_ascii=False, indent=2
+        )
+    elif isinstance(last_changed_payload, str) and last_changed_payload:
+        last_changed_display = last_changed_payload
+    else:
+        last_changed_display = "s/d"
+    if isinstance(last_changed_display, str):
+        last_changed_display = last_changed_display.replace("\n", " ")
+
+    md = dedent(
+        f"""
+        # 📐 Metodología y Cálculo — {APP_VERSION}
+
+        **Build:** `{build_hash}`  
+        **Último cambio:** `{last_changed_display}`
+
+        ---
+        ## 1) Normalización de alimentos
+        - Columns destino: `ORIGEN, PRESENTACION, TIPO, MS, TND (%), PB, EE, COEF ATC, $/KG, EM, ENP2`
+        - Limpieza numérica: remoción de `$`, `%`, espacios; `,`→`.`; a `float`.
+        - `MS` y `TND (%)` en fracción (≤1) se multiplican ×100.
+        - Unicidad por `ORIGEN` (case-insensitive), se conserva la última fila.
+        - Encoding CSV: UTF-8 con BOM.
+
+        ## 2) Receta 100% MS
+        - Cada ración define **hasta 6 ingredientes** con `%MS` que suma **100±0.5**.
+        - Se usa MS del alimento para calcular **factor as-fed**:  
+          `MS_frac_i = MS_i/100`, `factor_asfed = 1 / Σ( pct_ms_i/100 × MS_frac_i )`.
+
+        ## 3) Cálculo diario (PV, CV → MS → reparto)
+        - `Consumo_MS_dia = PV_kg × (CV_pct / 100)`
+        - Por ingrediente *i*:
+          - `MS_kg_i = Consumo_MS_dia × (pct_ms_i/100)`
+          - `asfed_kg_i = MS_kg_i / max(MS_frac_i, 1e-6)`
+          - `EM_Mcal_i = MS_kg_i × EM_i`
+          - `PB_g_i = MS_kg_i × (PB_i/100) × 1000`
+          - `Costo_dia_i = asfed_kg_i × ($/KG_i)`
+        - Totales:
+          - `asfed_total_kg_dia = Σ asfed_kg_i`
+          - `EM_Mcal_dia = Σ EM_Mcal_i`
+          - `PB_g_dia = Σ PB_g_i`
+          - `Costo_dia = Σ Costo_dia_i`
+
+        ## 4) Requerimientos (interpolación)
+        - Tablas: `requerimientos_energeticos.csv` (Mcal/día), `requerimiento_proteico.csv` (g PB/día).
+        - Filtro por `cat` (case-insensitive).
+        - Si hay columna `ap`: **interpolación bilineal** (peso, ap). Si no, **1D por peso**.
+        - Coberturas:
+          - `cov_EM = EM_Mcal_dia / req_EM`
+          - `cov_PB = PB_g_dia / req_PB`
+          - Semáforos: verde ≥98%, amarillo 95–98%, rojo <95%.
+
+        ## 5) Mixer — plan por turno y por descarga
+        - `kg_por_turno = Σ kg_turno_asfed_calc` de corrales (tipo+ración).
+        - `kg_totales_dia = kg_por_turno × turnos`.
+        - Expansión por turnos (1..N) y distribución a corrales (`kg/CORRAL`).
+        - Verificación contra `capacidad_kg` del mixer (por turno).
+
+        ## 6) Aislamiento por usuario
+        - Ruta de trabajo: `data/users/<username>/...`.
+        - Todos los `save_*` guardan en esa sandbox.
+
+        ## 7) Export/Import/Backup
+        - Export ZIP con todas las tablas del usuario.
+        - Import ZIP para restaurar.
+        - Backup GitHub opcional mediante `GH_TOKEN` (commit a `data/users/<username>/...`).
+
+        ---
+        ### Columnas detectadas (runtime)
+        ```json
+        {json.dumps(resumen_tablas, ensure_ascii=False, indent=2)}
+        ```
+        """
+    )
+
+    meta = {
+        "build_hash": build_hash,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "app_version": APP_VERSION,
+        "tables": resumen_tablas,
+        "last_changed": last_changed_payload,
+    }
+    return md, meta
 
 
 def _get_secret(key: str, default=None):
@@ -836,6 +1017,7 @@ def save_alimentos(df: pd.DataFrame):
         path=str(ALIM_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_alimentos", username)
 
 @st.cache_data
 def load_mixers() -> pd.DataFrame:
@@ -853,6 +1035,7 @@ def save_mixers(df: pd.DataFrame):
         path=str(MIXERS_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_mixers", username)
 
 @st.cache_data
 def load_pesos() -> pd.DataFrame:
@@ -873,6 +1056,7 @@ def save_pesos(df: pd.DataFrame):
         path=str(PESOS_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_pesos", username)
 
 @st.cache_data
 def load_reqener() -> pd.DataFrame:
@@ -904,6 +1088,7 @@ def save_reqener(df: pd.DataFrame):
         path=str(REQENER_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_reqener", username)
 
 @st.cache_data
 def load_reqprot() -> pd.DataFrame:
@@ -943,6 +1128,7 @@ def save_reqprot(df: pd.DataFrame):
         path=str(REQPROT_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_reqprot", username)
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -976,6 +1162,7 @@ def save_catalog(df: pd.DataFrame):
         path=str(CATALOG_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_catalog", username)
 
 @st.cache_data
 def load_recipes() -> pd.DataFrame:
@@ -999,6 +1186,7 @@ def save_recipes(df: pd.DataFrame):
         path=str(RECIPES_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_recipes", username)
 
 def build_raciones_from_recipes() -> list:
     cat = load_catalog()
@@ -1089,6 +1277,7 @@ def save_base(df: pd.DataFrame):
         path=str(BASE_PATH),
         meta={"github_backup": success},
     )
+    mark_changed("save_base", username)
 
 
 def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
@@ -1192,18 +1381,34 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
-tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_presentacion, tab_admin = st.tabs(
-    [
-        "📊 Stock & Corrales",
-        "🧾 Ajustes de raciones",
-        "📦 Alimentos",
-        "🧮 Mixer",
-        "⚙️ Parámetros",
-        "⬇️ Exportar",
-        "🌾 Acerca de",
+tab_labels = [
+    "📊 Stock & Corrales",
+    "🧾 Ajustes de raciones",
+    "📦 Alimentos",
+    "🧮 Mixer",
+    "⚙️ Parámetros",
+    "⬇️ Exportar",
+    "🌾 Acerca de",
+]
+
+admin_tab_labels: list[str] = []
+if USER_IS_ADMIN:
+    admin_tab_labels.extend([
+        "📐 Metodología y Cálculo (Admin)",
         "👤 Usuarios (Admin)",
-    ]
-)
+    ])
+
+tabs = st.tabs(tab_labels + admin_tab_labels)
+
+tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_presentacion, *admin_tabs = tabs
+
+tab_methodology = tab_admin = None
+if USER_IS_ADMIN and admin_tabs:
+    if len(admin_tabs) == 2:
+        tab_methodology, tab_admin = admin_tabs
+    elif len(admin_tabs) == 1:
+        # Solo se definió la pestaña de usuarios (compatibilidad defensiva)
+        tab_admin = admin_tabs[0]
 
 # ------------------------------------------------------------------------------
 # 📊 Stock & Corrales (principal)
@@ -2103,113 +2308,138 @@ with tab_presentacion:
     st.caption("© 2025 Sistema Ganadero Integral – Todos los derechos reservados.")
 
 # ------------------------------------------------------------------------------
+# 📐 Metodología y Cálculo (solo admin)
+# ------------------------------------------------------------------------------
+if USER_IS_ADMIN and tab_methodology is not None:
+    with tab_methodology:
+        st.subheader("📐 Metodología y Cálculo (solo admin)")
+        md, meta = build_methodology_doc()
+        st.markdown(md)
+
+        st.download_button(
+            "⬇️ Exportar metodología (Markdown)",
+            data=md.encode("utf-8"),
+            file_name="metodologia_y_calculo.md",
+            mime="text/markdown",
+            type="primary",
+        )
+
+        st.download_button(
+            "⬇️ Exportar metadatos (JSON)",
+            data=json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name="metodologia_meta.json",
+            mime="application/json",
+        )
+
+# ------------------------------------------------------------------------------
 # 👤 Usuarios (Admin)
 # ------------------------------------------------------------------------------
-with tab_admin:
-    if username not in ADMIN_USERS:
-        st.warning("No tenés permisos para administrar usuarios.")
-    else:
-        with card("👤 Administración de usuarios", "Crear, editar y cambiar contraseñas"):
-            import re
-            import bcrypt
+if tab_admin is not None:
+    with tab_admin:
+        if not USER_IS_ADMIN:
+            st.warning("No tenés permisos para administrar usuarios.")
+        else:
+            with card("👤 Administración de usuarios", "Crear, editar y cambiar contraseñas"):
+                import re
+                import bcrypt
 
-            def save_user_store(store_dict):
-                AUTH_STORE.write_text(
-                    yaml.safe_dump(store_dict, allow_unicode=True, sort_keys=False),
-                    encoding="utf-8",
-                )
-                st.success("Cambios guardados.")
-                st.toast("Usuarios actualizados.", icon="✅")
-                st.rerun()
+                def save_user_store(store_dict):
+                    AUTH_STORE.write_text(
+                        yaml.safe_dump(store_dict, allow_unicode=True, sort_keys=False),
+                        encoding="utf-8",
+                    )
+                    st.success("Cambios guardados.")
+                    st.toast("Usuarios actualizados.", icon="✅")
+                    st.rerun()
 
-            # Cargar estado actual del store
-            store = load_user_store()
-            users = (store.get("credentials") or {}).get("usernames", {}) or {}
+                # Cargar estado actual del store
+                store = load_user_store()
+                users = (store.get("credentials") or {}).get("usernames", {}) or {}
 
-            st.markdown("### Usuarios existentes")
-            if users:
-                df_users = pd.DataFrame(
-                    [
-                        {"usuario": u, "nombre": v.get("name", ""), "email": v.get("email", "")}
-                        for u, v in sorted(users.items())
-                    ]
-                )
-                st.dataframe(df_users, use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay usuarios en el store editable (data/auth/users.yaml).")
-
-            st.markdown("---")
-            st.markdown("### Agregar / Editar usuario")
-            col_u1, col_u2 = st.columns(2)
-            new_user = col_u1.text_input("Usuario", placeholder="ej: juan").strip()
-            new_name = col_u2.text_input("Nombre visible", placeholder="ej: Juan Pérez").strip()
-            new_email = st.text_input("Email", placeholder="juan@example.com").strip()
-
-            col_p1, col_p2 = st.columns(2)
-            pw = col_p1.text_input(
-                "Contraseña (dejar vacío para no cambiar si el usuario ya existe)",
-                type="password",
-            )
-            pw2 = col_p2.text_input("Repetir contraseña", type="password")
-
-            ccol1, ccol2, ccol3 = st.columns(3)
-            create_or_update = ccol1.button("💾 Crear / Actualizar", type="primary")
-            delete_btn = ccol2.button("🗑️ Eliminar usuario", type="secondary", disabled=(not new_user))
-            reset_cookie = ccol3.checkbox(
-                "Rotar cookie (forzar re-login)",
-                value=False,
-                help="Se incrementará el sufijo del nombre de cookie.",
-            )
-
-            if create_or_update:
-                if not new_user:
-                    st.error("Ingresá un nombre de usuario."); st.stop()
-                if not re.match(r"^[a-zA-Z0-9_.-]{3,}$", new_user):
-                    st.error("Usuario inválido (usa letras/números/._-, mínimo 3)."); st.stop()
-                if not new_name:
-                    st.error("Ingresá un nombre visible."); st.stop()
-                if new_email and "@" not in new_email:
-                    st.error("Email inválido."); st.stop()
-
-                entry = users.get(new_user, {}).copy()
-                entry["name"] = new_name
-                if new_email:
-                    entry["email"] = new_email
-
-                if pw or pw2:
-                    if pw != pw2:
-                        st.error("Las contraseñas no coinciden."); st.stop()
-                    hashed = bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-                    entry["password"] = hashed
-
-                users[new_user] = entry
-                store.setdefault("credentials", {})["usernames"] = users
-
-                if reset_cookie:
-                    base_cookie = CFG.get("cookie", {}).get("name", "gefeed_cookie")
-                    import re as _re
-
-                    m = _re.match(r"^(.*)_v(\d+)$", base_cookie)
-                    if m:
-                        base, n = m.group(1), int(m.group(2))
-                        new_cookie = f"{base}_v{n+1}"
-                    else:
-                        new_cookie = f"{base_cookie}_v2"
-                    store.setdefault("cookie", {})["name"] = new_cookie
-                    st.info(f"Cookie rotada a: {new_cookie}")
-
-                save_user_store(store)
-
-            if delete_btn:
-                if new_user in users:
-                    if new_user in ADMIN_USERS:
-                        st.error("No podés eliminar un usuario admin definido en ADMIN_USERS.")
-                    else:
-                        users.pop(new_user, None)
-                        store.setdefault("credentials", {})["usernames"] = users
-                        save_user_store(store)
+                st.markdown("### Usuarios existentes")
+                if users:
+                    df_users = pd.DataFrame(
+                        [
+                            {"usuario": u, "nombre": v.get("name", ""), "email": v.get("email", "")}
+                            for u, v in sorted(users.items())
+                        ]
+                    )
+                    st.dataframe(df_users, use_container_width=True, hide_index=True)
                 else:
-                    st.warning("Ese usuario no existe en el store.")
+                    st.info("No hay usuarios en el store editable (data/auth/users.yaml).")
+
+                st.markdown("---")
+                st.markdown("### Agregar / Editar usuario")
+                col_u1, col_u2 = st.columns(2)
+                new_user = col_u1.text_input("Usuario", placeholder="ej: juan").strip()
+                new_name = col_u2.text_input("Nombre visible", placeholder="ej: Juan Pérez").strip()
+                new_email = st.text_input("Email", placeholder="juan@example.com").strip()
+
+                col_p1, col_p2 = st.columns(2)
+                pw = col_p1.text_input(
+                    "Contraseña (dejar vacío para no cambiar si el usuario ya existe)",
+                    type="password",
+                )
+                pw2 = col_p2.text_input("Repetir contraseña", type="password")
+
+                ccol1, ccol2, ccol3 = st.columns(3)
+                create_or_update = ccol1.button("💾 Crear / Actualizar", type="primary")
+                delete_btn = ccol2.button("🗑️ Eliminar usuario", type="secondary", disabled=(not new_user))
+                reset_cookie = ccol3.checkbox(
+                    "Rotar cookie (forzar re-login)",
+                    value=False,
+                    help="Se incrementará el sufijo del nombre de cookie.",
+                )
+
+                if create_or_update:
+                    if not new_user:
+                        st.error("Ingresá un nombre de usuario."); st.stop()
+                    if not re.match(r"^[a-zA-Z0-9_.-]{3,}$", new_user):
+                        st.error("Usuario inválido (usa letras/números/._-, mínimo 3)."); st.stop()
+                    if not new_name:
+                        st.error("Ingresá un nombre visible."); st.stop()
+                    if new_email and "@" not in new_email:
+                        st.error("Email inválido."); st.stop()
+
+                    entry = users.get(new_user, {}).copy()
+                    entry["name"] = new_name
+                    if new_email:
+                        entry["email"] = new_email
+
+                    if pw or pw2:
+                        if pw != pw2:
+                            st.error("Las contraseñas no coinciden."); st.stop()
+                        hashed = bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+                        entry["password"] = hashed
+
+                    users[new_user] = entry
+                    store.setdefault("credentials", {})["usernames"] = users
+
+                    if reset_cookie:
+                        base_cookie = CFG.get("cookie", {}).get("name", "gefeed_cookie")
+                        import re as _re
+
+                        m = _re.match(r"^(.*)_v(\d+)$", base_cookie)
+                        if m:
+                            base, n = m.group(1), int(m.group(2))
+                            new_cookie = f"{base}_v{n+1}"
+                        else:
+                            new_cookie = f"{base_cookie}_v2"
+                        store.setdefault("cookie", {})["name"] = new_cookie
+                        st.info(f"Cookie rotada a: {new_cookie}")
+
+                    save_user_store(store)
+
+                if delete_btn:
+                    if new_user in users:
+                        if is_admin(new_user):
+                            st.error("No podés eliminar un usuario admin definido en la configuración.")
+                        else:
+                            users.pop(new_user, None)
+                            store.setdefault("credentials", {})["usernames"] = users
+                            save_user_store(store)
+                    else:
+                        st.warning("Ese usuario no existe en el store.")
 
 # ------------------------------------------------------------------------------
 # 🧾 Ajustes de raciones (catálogo + recetas)
