@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import requests
+import qrcode
 
 from calc_engine import (
     Food,
@@ -115,6 +116,12 @@ def synthetic_em_requirement(pv_kg: float, ap_kg_dia: float, categoria: str | No
 st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 
 CFG_PATH = Path("config_users.yaml")  # opcional (dev local o repo privado)
+
+# ------------------------------------------------------------------------------
+# Preferencias de UI (persistidas en sesión)
+# ------------------------------------------------------------------------------
+if "dark_mode" not in st.session_state:
+    st.session_state["dark_mode"] = False
 
 
 def load_base_cfg():
@@ -216,7 +223,26 @@ if auth_status is False:
 elif auth_status is None:
     st.info("Ingresá tus credenciales"); st.stop()
 
-st.sidebar.write(f"👤 {name} (@{username})")
+user_profile = {}
+credentials_cfg = (CFG.get("credentials") or {}).get("usernames", {})
+if isinstance(credentials_cfg, dict):
+    user_profile = credentials_cfg.get(username, {}) or {}
+
+user_email = str(user_profile.get("email", "") or "").strip()
+if user_email:
+    st.session_state["email"] = user_email
+
+with st.sidebar:
+    st.title("⚙️ Opciones")
+    st.write(f"👤 {name} (@{username})")
+    toggle_label = (
+        "☀️ Desactivar modo oscuro"
+        if st.session_state["dark_mode"]
+        else "🌙 Activar modo oscuro"
+    )
+    if st.button(toggle_label, key="toggle_dark_mode"):
+        st.session_state["dark_mode"] = not st.session_state["dark_mode"]
+
 authenticator.logout("Salir", "sidebar")
 APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
 st.title(APP_VERSION)
@@ -252,28 +278,134 @@ details[open] .expander-body { animation: fadeIn .2s ease both; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-/* DataEditor: encabezados de columnas */
-[data-testid="stDataEditor"] thead tr th {
-  background: #F3F4F6;
-  color: #111827;
-  border-bottom: 2px solid #E5E7EB;
-}
-[data-testid="stDataEditor"] thead tr th:first-child {
-  background: #E0F2FE;
-}
-[data-testid="stDataEditor"] thead tr th:nth-child(2) {
-  background: #FEF3C7;
-}
-[data-testid="stDataEditor"] thead tr th:nth-child(3) {
-  background: #DCFCE7;
-}
-[data-testid="stDataEditor"] thead tr th:hover {
-  filter: brightness(0.98);
-}
-</style>
-""", unsafe_allow_html=True)
+if st.session_state["dark_mode"]:
+    st.markdown(
+        """
+        <style>
+        html, body, .stApp {
+            background-color: #121212;
+            color: #EAEAEA;
+        }
+        [data-testid="stAppViewContainer"] {
+            background-color: #1B1B1B;
+            color: #EAEAEA;
+        }
+        .main {
+            background-color: #1B1B1B;
+            color: #EAEAEA;
+        }
+        div[data-testid="stHeader"] {
+            background: linear-gradient(90deg, #3E2723, #1B1B1B);
+            color: #F5F0E6;
+        }
+        .card {
+            background: #242424;
+            border-color: #3A3A3A;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+        }
+        .card:hover {
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.60);
+        }
+        .stButton>button {
+            background-color: #4E342E;
+            color: #FFF;
+            border-radius: 8px;
+        }
+        .stButton>button:hover {
+            background-color: #6D4C41;
+        }
+        h1, h2, h3 {
+            color: #E0C097 !important;
+        }
+        [data-testid="stDataEditor"] thead tr th {
+            background: #2A2623;
+            color: #F5F0E6;
+            border-bottom: 2px solid #4E3B33;
+        }
+        [data-testid="stDataEditor"] thead tr th:first-child {
+            background: #3B2F29;
+        }
+        [data-testid="stDataEditor"] thead tr th:nth-child(2) {
+            background: #393224;
+        }
+        [data-testid="stDataEditor"] thead tr th:nth-child(3) {
+            background: #2F3A2C;
+        }
+        [data-testid="stDataEditor"] thead tr th:hover {
+            filter: brightness(1.08);
+        }
+        a {
+            color: #E0C097;
+        }
+        :root {
+            color-scheme: dark;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        """
+        <style>
+        html, body, .stApp {
+            background-color: #F5F0E6;
+            color: #3E2723;
+        }
+        [data-testid="stAppViewContainer"] {
+            background-color: #F5F0E6;
+            color: #3E2723;
+        }
+        .main {
+            background-color: #F5F0E6;
+            color: #3E2723;
+        }
+        div[data-testid="stHeader"] {
+            background: linear-gradient(90deg, #6D4C41, #4E342E);
+            color: #FFFFFF;
+        }
+        .card {
+            background: #FFFFFF;
+            border-color: #D7CCC8;
+        }
+        .card:hover {
+            box-shadow: 0 6px 18px rgba(109, 78, 65, 0.18);
+        }
+        .stButton>button {
+            background-color: #6D4C41;
+            color: #FFF;
+            border-radius: 8px;
+        }
+        .stButton>button:hover {
+            background-color: #8D6E63;
+        }
+        h1, h2, h3 {
+            color: #4E342E !important;
+        }
+        [data-testid="stDataEditor"] thead tr th {
+            background: #EFE5DA;
+            color: #3E2723;
+            border-bottom: 2px solid #D7CCC8;
+        }
+        [data-testid="stDataEditor"] thead tr th:first-child {
+            background: #E8D3C1;
+        }
+        [data-testid="stDataEditor"] thead tr th:nth-child(2) {
+            background: #E3E0CF;
+        }
+        [data-testid="stDataEditor"] thead tr th:nth-child(3) {
+            background: #E2EBE1;
+        }
+        [data-testid="stDataEditor"] thead tr th:hover {
+            filter: brightness(0.98);
+        }
+        a {
+            color: #4E342E;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # Helpers de UI
 @contextmanager
@@ -1060,7 +1192,7 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
-tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_admin = st.tabs(
+tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_presentacion, tab_admin = st.tabs(
     [
         "📊 Stock & Corrales",
         "🧾 Ajustes de raciones",
@@ -1068,6 +1200,7 @@ tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export
         "🧮 Mixer",
         "⚙️ Parámetros",
         "⬇️ Exportar",
+        "🌾 Acerca de",
         "👤 Usuarios (Admin)",
     ]
 )
@@ -1920,6 +2053,55 @@ with tab_parametros:
         if st.button("🔄 Recargar requerimientos proteicos", key="reload_reqprot"):
             rerun_with_cache_reset()
         st.caption("Tabla fija: los valores se editan fuera de la aplicación.")
+
+# ------------------------------------------------------------------------------
+# 🌾 Presentación / Acerca de
+# ------------------------------------------------------------------------------
+with tab_presentacion:
+    st.header("🌾 Physis Feedlot – Sistema Ganadero Integral")
+    st.markdown(
+        """
+        Software modular para la **gestión ganadera y de alimentación**, diseñado para feedlots y empresas agropecuarias.
+        """
+    )
+    st.markdown(f"Versión: **{APP_VERSION}**")
+
+    active_display = f"{name} (@{username})"
+    st.write(f"👤 Usuario activo: **{active_display}**")
+
+    active_email = str(
+        st.session_state.get("email") or user_email or "demo@physis.com.ar"
+    )
+    if active_email:
+        st.write(f"✉️ Email registrado: **{active_email}**")
+
+    mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
+    mp_link = f"https://mpago.la/{mp_slug}"
+
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(mp_link)
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    qr_img.save(buf, format="PNG")
+    st.image(buf.getvalue(), caption="📱 Escaneá para abonar o contactar")
+
+    st.markdown(f"🔗 [Link directo de pago o contacto]({mp_link})")
+
+    st.markdown("---")
+    st.subheader("📧 Contacto y soporte")
+    st.markdown(
+        """
+        **Physis Informática S.R.L.**
+        - 📍 Salta, Argentina  
+        - 📞 +54 9 387 407 3236  
+        - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)  
+        - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
+        """
+    )
+
+    st.markdown("---")
+    st.caption("© 2025 Physis Feedlot – Todos los derechos reservados.")
 
 # ------------------------------------------------------------------------------
 # 👤 Usuarios (Admin)
