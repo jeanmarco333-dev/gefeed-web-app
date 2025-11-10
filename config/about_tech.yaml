@@ -1,0 +1,30 @@
+version: "JM P-Feedlot v0.26"
+categories:
+  Backend:
+    - Python 3.11
+    - Streamlit 1.40 (framework principal)
+    - pandas (procesamiento de datos)
+    - numpy (cálculos numéricos)
+    - PyYAML (manejo de configuración)
+  Frontend y UI:
+    - Streamlit Components
+    - CSS Custom Theme (tema ganadero claro/oscuro)
+    - HTML5 / Markdown para maquetado dinámico
+  Seguridad y autenticación:
+    - streamlit-authenticator (bcrypt + cookies seguras)
+    - YAML credentials config
+  Persistencia y backup:
+    - CSV locales por usuario (`data/users/<usuario>/…`)
+    - Export / Import ZIP
+    - Integración opcional con GitHub Backup (`GH_TOKEN`)
+  Librerías de cálculo ganadero:
+    - Cálculo energético y proteico (EM, PB)
+    - Interpolación de requerimientos (pandas / numpy)
+    - Generación de plan mixer y descargas por corral
+  Entorno y despliegue:
+    - Streamlit Cloud (gratuito)
+    - Codespaces / GitHub para desarrollo
+    - Host opcional en Hostinger o VPS
+  Herramientas externas:
+    - qrcode (generación QR para pagos)
+    - matplotlib (visualización opcional)
