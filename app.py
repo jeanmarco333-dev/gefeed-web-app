@@ -2058,7 +2058,7 @@ with tab_parametros:
 # 🌾 Presentación / Acerca de
 # ------------------------------------------------------------------------------
 with tab_presentacion:
-    st.header("🌾 Sistema Ganadero Integral")
+    st.header("🌾 Physis Feedlot – Sistema Ganadero Integral")
     st.markdown(
         """
         Software modular para la **gestión ganadera y de alimentación**, diseñado para feedlots y empresas agropecuarias.
@@ -2070,12 +2070,12 @@ with tab_presentacion:
     st.write(f"👤 Usuario activo: **{active_display}**")
 
     active_email = str(
-        st.session_state.get("email") or user_email or "demo@example.com"
+        st.session_state.get("email") or user_email or "demo@physis.com.ar"
     )
     if active_email:
         st.write(f"✉️ Email registrado: **{active_email}**")
 
-    mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "feedlotapp"
+    mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
     mp_link = f"https://mpago.la/{mp_slug}"
 
     qr = qrcode.QRCode(box_size=10, border=2)
@@ -2092,11 +2092,10 @@ with tab_presentacion:
     st.subheader("📧 Contacto y soporte")
     st.markdown(
         """
-        **Soporte comercial**
-        - 📍 Sede central
-        - 📞 +00 0000 0000
-        - ✉️ [soporte@example.com](mailto:soporte@example.com)
-        - 🌐 [www.ejemplo.com](https://www.ejemplo.com)
+        - 📍 Salta, Argentina  
+        - 📞 +54 9 387 407 3236  
+        - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)  
+        - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
         """
     )
 
