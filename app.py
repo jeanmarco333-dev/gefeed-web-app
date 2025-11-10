@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -2271,41 +2272,114 @@ with tab_presentacion:
     )
     st.markdown(f"Versión: **{APP_VERSION}**")
 
-    active_display = f"{name} (@{username})"
-    st.write(f"👤 Usuario activo: **{active_display}**")
-
-    active_email = str(
-        st.session_state.get("email") or user_email or "demo@physis.com.ar"
-    )
-    if active_email:
-        st.write(f"✉️ Email registrado: **{active_email}**")
-
-    mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
-    mp_link = f"https://mpago.la/{mp_slug}"
-
-    qr = qrcode.QRCode(box_size=10, border=2)
-    qr.add_data(mp_link)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    qr_img.save(buf, format="PNG")
-    st.image(buf.getvalue(), caption="📱 Escaneá para abonar o contactar")
-
-    st.markdown(f"🔗 [Link directo de pago o contacto]({mp_link})")
-
-    st.markdown("---")
-    st.subheader("📧 Contacto y soporte")
-    st.markdown(
-        """
-        - 📍 Salta, Argentina  
-        - 📞 +54 9 387 407 3236  
-        - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)  
-        - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
-        """
+    tab_info_general, tab_info_tecnologias = st.tabs(
+        ["ℹ️ Información general", "🧩 Tecnologías y lenguajes usados"]
     )
 
-    st.markdown("---")
-    st.caption("© 2025 Sistema Ganadero Integral – Todos los derechos reservados.")
+    with tab_info_general:
+        active_display = f"{name} (@{username})"
+        st.write(f"👤 Usuario activo: **{active_display}**")
+
+        active_email = str(
+            st.session_state.get("email") or user_email or "demo@physis.com.ar"
+        )
+        if active_email:
+            st.write(f"✉️ Email registrado: **{active_email}**")
+
+        mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
+        mp_link = f"https://mpago.la/{mp_slug}"
+
+        qr = qrcode.QRCode(box_size=10, border=2)
+        qr.add_data(mp_link)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        qr_img.save(buf, format="PNG")
+        st.image(buf.getvalue(), caption="📱 Escaneá para abonar o contactar")
+
+        st.markdown(f"🔗 [Link directo de pago o contacto]({mp_link})")
+
+        st.markdown("---")
+        st.subheader("📧 Contacto y soporte")
+        st.markdown(
+            """
+            - 📍 Salta, Argentina
+            - 📞 +54 9 387 407 3236
+            - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)
+            - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
+            """
+        )
+
+        st.markdown("---")
+        st.caption("© 2025 Sistema Ganadero Integral – Todos los derechos reservados.")
+
+    with tab_info_tecnologias:
+        st.subheader("🧩 Tecnologías y Lenguajes Utilizados")
+
+        tech_cfg: dict[str, Any] = {}
+        tech_cfg_path = Path("config/about_tech.yaml")
+
+        if tech_cfg_path.exists():
+            try:
+                loaded_cfg = yaml.safe_load(
+                    tech_cfg_path.read_text(encoding="utf-8")
+                )
+                if isinstance(loaded_cfg, dict):
+                    tech_cfg = loaded_cfg
+                else:
+                    st.warning("El archivo de tecnologías no tiene el formato esperado.")
+            except Exception as exc:
+                st.error(f"No se pudo leer config/about_tech.yaml: {exc}")
+        else:
+            st.info("Aún no se cargó el archivo config/about_tech.yaml.")
+
+        version_actual = str(tech_cfg.get("version", "s/d"))
+        st.markdown(f"**Versión actual:** `{version_actual}`")
+
+        categorias_raw = tech_cfg.get("categories", {}) if isinstance(tech_cfg, dict) else {}
+        categorias: list[tuple[str, list[str]]] = []
+        if isinstance(categorias_raw, dict):
+            for categoria, items in categorias_raw.items():
+                if isinstance(items, (list, tuple, set)):
+                    valores = [str(item) for item in items if str(item).strip()]
+                elif items not in (None, ""):
+                    valores = [str(items)]
+                else:
+                    valores = []
+                if valores:
+                    categorias.append((str(categoria), valores))
+        elif categorias_raw:
+            st.warning("Las categorías de tecnologías no son válidas.")
+
+        if categorias:
+            for idx, (categoria, valores) in enumerate(categorias):
+                st.markdown(f"### {categoria}")
+                st.markdown("\n".join(f"- {valor}" for valor in valores))
+                if idx < len(categorias) - 1:
+                    st.markdown("---")
+        else:
+            st.info("No hay tecnologías cargadas para mostrar.")
+
+        md_lines = [
+            "# Tecnologías y Lenguajes",
+            "",
+            f"**Versión actual:** `{version_actual}`",
+            "",
+        ]
+        for categoria, valores in categorias:
+            md_lines.append(f"## {categoria}")
+            md_lines.extend(f"- {valor}" for valor in valores)
+            md_lines.append("")
+
+        md_content = "\n".join(md_lines).rstrip() + "\n"
+
+        st.download_button(
+            "⬇️ Exportar documentación técnica (Markdown)",
+            data=md_content.encode("utf-8"),
+            file_name="tecnologias_y_lenguajes.md",
+            mime="text/markdown",
+            disabled=not categorias,
+        )
 
 # ------------------------------------------------------------------------------
 # 📐 Metodología y Cálculo (solo admin)
