@@ -1,4 +1,4 @@
-# app.py — JM P-Feedlot v0.26-beta (free) — UI mejorada (transiciones + menús + validaciones)
+# app.py — GE-Feedlot v0.26-beta (free) — UI mejorada (transiciones + menús + validaciones)
 # Pestañas: 📊 Stock & Corrales | 🧾 Ajustes de raciones | 📦 Alimentos | 🧮 Mixer | ⚙️ Parámetros | ⬇️ Exportar
 # Estructura:
 #   app.py, calc_engine.py, requirements.txt
