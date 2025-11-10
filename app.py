@@ -2092,7 +2092,6 @@ with tab_presentacion:
     st.subheader("📧 Contacto y soporte")
     st.markdown(
         """
-        **Physis Informática S.R.L.**
         - 📍 Salta, Argentina  
         - 📞 +54 9 387 407 3236  
         - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)  
@@ -2101,7 +2100,7 @@ with tab_presentacion:
     )
 
     st.markdown("---")
-    st.caption("© 2025 Physis Feedlot – Todos los derechos reservados.")
+    st.caption("© 2025 Sistema Ganadero Integral – Todos los derechos reservados.")
 
 # ------------------------------------------------------------------------------
 # 👤 Usuarios (Admin)
