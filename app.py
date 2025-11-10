@@ -1,4 +1,4 @@
-# app.py — JM P-Feedlot v0.26 (100% web) — UI mejorada (transiciones + menús + validaciones)
+# app.py — JM P-Feedlot v0.26-beta (free) — UI mejorada (transiciones + menús + validaciones)
 # Pestañas: 📊 Stock & Corrales | 🧾 Ajustes de raciones | 📦 Alimentos | 🧮 Mixer | ⚙️ Parámetros | ⬇️ Exportar
 # Estructura:
 #   app.py, calc_engine.py, requirements.txt
@@ -6,7 +6,9 @@
 #         requerimientos_energeticos.csv, requerimiento_proteico.csv
 from __future__ import annotations
 
+import base64
 import io
+import json
 import os
 import zipfile
 from contextlib import contextmanager
@@ -15,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import requests
 
 from calc_engine import (
     Food,
@@ -177,8 +180,10 @@ elif auth_status is None:
 
 st.sidebar.write(f"👤 {name} (@{username})")
 authenticator.logout("Salir", "sidebar")
-st.title("JM P-Feedlot v0.26 — Web")
+APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
+st.title(APP_VERSION)
 st.caption("Stock corrales • Ajustes de raciones • Alimentos • Mixer • Parámetros • Export ZIP")
+st.info("🚧 Versión beta sin costo: validando con clientes iniciales. Guardá y exportá seguido por seguridad.")
 
 # ------------------------------------------------------------------------------
 # CSS (transiciones, tarjetas, dropdowns, micro-interacciones)
@@ -268,6 +273,54 @@ CATALOG_PATH = user_path("raciones_catalog.csv")
 RECIPES_PATH = user_path("raciones_recipes.csv")
 REQENER_PATH = user_path("requerimientos_energeticos.csv")
 REQPROT_PATH = user_path("requerimiento_proteico.csv")
+AUDIT_LOG_PATH = user_path("audit_log.csv")
+
+MAX_CORRALES = 200
+MAX_UPLOAD_MB = 5
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+
+def _get_secret(key: str, default=None):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
+
+
+def _secret_lookup(container, key: str, default=None):
+    if isinstance(container, dict):
+        return container.get(key, default)
+    try:
+        return container[key]
+    except Exception:
+        return default
+
+
+_github_section = _get_secret("github", {})
+GITHUB_TOKEN = (
+    _secret_lookup(_github_section, "token")
+    or _get_secret("GH_TOKEN")
+    or os.getenv("GH_TOKEN")
+)
+GITHUB_REPO = (
+    _secret_lookup(_github_section, "repo")
+    or _get_secret("GH_REPO")
+    or os.getenv("GH_REPO")
+)
+GITHUB_BRANCH = (
+    _secret_lookup(_github_section, "branch")
+    or _get_secret("GH_BRANCH")
+    or os.getenv("GH_BRANCH")
+    or "main"
+)
+GITHUB_DATA_DIR = (
+    _secret_lookup(_github_section, "data_dir")
+    or _get_secret("GH_DATA_DIR")
+    or os.getenv("GH_DATA_DIR")
+    or "data"
+)
+GITHUB_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO)
+_github_warning_cache: set[str] = set()
 
 
 # Crear archivos mínimos si faltan
@@ -291,6 +344,10 @@ if not REQENER_PATH.exists():
     pd.DataFrame(columns=REQENER_COLS).to_csv(REQENER_PATH, index=False, encoding="utf-8")
 if not REQPROT_PATH.exists():
     pd.DataFrame(columns=REQPROT_COLS).to_csv(REQPROT_PATH, index=False, encoding="utf-8")
+if not AUDIT_LOG_PATH.exists():
+    pd.DataFrame(
+        columns=["timestamp", "user", "event", "details", "status", "path", "meta"]
+    ).to_csv(AUDIT_LOG_PATH, index=False, encoding="utf-8")
 
 def clear_streamlit_cache():
     try:
@@ -458,6 +515,136 @@ def normalize_alimentos(df: pd.DataFrame) -> pd.DataFrame:
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return normalize_alimentos(df)
 
+
+def _notify_github_warning(message: str) -> None:
+    if message in _github_warning_cache:
+        return
+    _github_warning_cache.add(message)
+    st.warning(message)
+
+
+def github_upsert(local_path: Path, *, message: str, repo_path: str | None = None) -> bool:
+    if not GITHUB_ENABLED:
+        return False
+    if not local_path.exists():
+        return False
+
+    if repo_path is None:
+        try:
+            relative = local_path.relative_to(GLOBAL_DATA_DIR).as_posix()
+        except ValueError:
+            relative = local_path.name
+        repo_path = f"{GITHUB_DATA_DIR.strip('/')}/{relative}".replace("//", "/")
+    else:
+        repo_path = repo_path.lstrip("/")
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{repo_path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    try:
+        content_bytes = local_path.read_bytes()
+    except Exception as exc:
+        _notify_github_warning(f"No se pudo leer {local_path.name} para el backup en GitHub: {exc}")
+        return False
+
+    encoded = base64.b64encode(content_bytes).decode("utf-8")
+
+    sha = None
+    try:
+        existing = requests.get(url, headers=headers, params={"ref": GITHUB_BRANCH}, timeout=10)
+    except Exception as exc:
+        _notify_github_warning(f"GitHub no disponible: {exc}")
+        return False
+
+    if existing.status_code == 200:
+        sha = existing.json().get("sha")
+    elif existing.status_code not in (200, 404):
+        _notify_github_warning(
+            f"No se pudo consultar el estado del backup ({existing.status_code})."
+        )
+        return False
+
+    payload = {
+        "message": message,
+        "content": encoded,
+        "branch": GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        response = requests.put(url, headers=headers, json=payload, timeout=10)
+    except Exception as exc:
+        _notify_github_warning(f"Error subiendo backup a GitHub: {exc}")
+        return False
+
+    if response.status_code not in (200, 201):
+        _notify_github_warning(
+            f"Backup en GitHub falló ({response.status_code}): {response.text[:120]}"
+        )
+        return False
+
+    return True
+
+
+def audit_log_append(
+    event: str,
+    details: str = "",
+    *,
+    status: str = "ok",
+    path: str | None = None,
+    meta: dict | None = None,
+) -> None:
+    record = {
+        "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "user": username,
+        "event": event,
+        "details": details,
+        "status": status,
+        "path": path or "",
+        "meta": json.dumps(meta, ensure_ascii=False) if meta else "",
+    }
+    try:
+        df = pd.DataFrame([record])
+        df.to_csv(
+            AUDIT_LOG_PATH,
+            mode="a",
+            header=not AUDIT_LOG_PATH.exists() or AUDIT_LOG_PATH.stat().st_size == 0,
+            index=False,
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[AUDIT] No se pudo escribir el log: {exc}", flush=True)
+    else:
+        print(f"[AUDIT] {record}", flush=True)
+
+
+def backup_user_file(local_path: Path, label: str) -> bool:
+    message = f"[{username}] {label}"
+    return github_upsert(local_path, message=message)
+
+
+def validate_upload_size(uploaded_file, *, label: str) -> bool:
+    size = getattr(uploaded_file, "size", None)
+    if size and size > MAX_UPLOAD_BYTES:
+        mb = size / (1024 * 1024)
+        st.error(f"{label} excede el límite de {MAX_UPLOAD_MB} MB (actual: {mb:.2f} MB).")
+        audit_log_append(
+            "upload_blocked",
+            f"{label} demasiado grande",
+            status="blocked",
+            meta={"size_mb": round(mb, 2)},
+        )
+        return False
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+    return True
+
 # ------------------------------------------------------------------------------
 # IO helpers (cache)
 # ------------------------------------------------------------------------------
@@ -472,6 +659,13 @@ def load_alimentos() -> pd.DataFrame:
 
 def save_alimentos(df: pd.DataFrame):
     _normalize_columns(df.copy()).to_csv(ALIM_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(ALIM_PATH, "Actualizar catálogo de alimentos")
+    audit_log_append(
+        "save_alimentos",
+        "Catálogo actualizado",
+        path=str(ALIM_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_mixers() -> pd.DataFrame:
@@ -482,6 +676,13 @@ def load_mixers() -> pd.DataFrame:
 
 def save_mixers(df: pd.DataFrame):
     df.to_csv(MIXERS_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(MIXERS_PATH, "Actualizar mixers")
+    audit_log_append(
+        "save_mixers",
+        "Mixers actualizados",
+        path=str(MIXERS_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_pesos() -> pd.DataFrame:
@@ -495,6 +696,13 @@ def save_pesos(df: pd.DataFrame):
     out["peso_kg"] = pd.to_numeric(out["peso_kg"], errors="coerce")
     out = out.dropna().drop_duplicates().sort_values("peso_kg").reset_index(drop=True)
     out.to_csv(PESOS_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(PESOS_PATH, "Actualizar pesos")
+    audit_log_append(
+        "save_pesos",
+        "Pesos actualizados",
+        path=str(PESOS_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_reqener() -> pd.DataFrame:
@@ -519,6 +727,13 @@ def save_reqener(df: pd.DataFrame):
     out["cat"] = out["cat"].fillna("").astype(str)
     out = out[REQENER_COLS]
     out.to_csv(REQENER_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(REQENER_PATH, "Actualizar requerimientos energéticos")
+    audit_log_append(
+        "save_reqener",
+        "Requerimientos energéticos actualizados",
+        path=str(REQENER_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_reqprot() -> pd.DataFrame:
@@ -551,6 +766,13 @@ def save_reqprot(df: pd.DataFrame):
     out["cat"] = out["cat"].fillna("").astype(str)
     out = out[REQPROT_COLS]
     out.to_csv(REQPROT_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(REQPROT_PATH, "Actualizar requerimientos proteicos")
+    audit_log_append(
+        "save_reqprot",
+        "Requerimientos proteicos actualizados",
+        path=str(REQPROT_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -577,6 +799,13 @@ def load_catalog() -> pd.DataFrame:
 
 def save_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(CATALOG_PATH, "Actualizar catálogo de raciones")
+    audit_log_append(
+        "save_catalog",
+        "Catálogo de raciones actualizado",
+        path=str(CATALOG_PATH),
+        meta={"github_backup": success},
+    )
 
 @st.cache_data
 def load_recipes() -> pd.DataFrame:
@@ -593,6 +822,13 @@ def save_recipes(df: pd.DataFrame):
     out["pct_ms"] = pd.to_numeric(out["pct_ms"], errors="coerce").fillna(0.0)
     out = out[out["ingrediente"].astype(str).str.strip()!=""]
     out.to_csv(RECIPES_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(RECIPES_PATH, "Actualizar recetas de raciones")
+    audit_log_append(
+        "save_recipes",
+        "Recetas actualizadas",
+        path=str(RECIPES_PATH),
+        meta={"github_backup": success},
+    )
 
 def build_raciones_from_recipes() -> list:
     cat = load_catalog()
@@ -676,6 +912,13 @@ def load_base() -> pd.DataFrame:
 
 def save_base(df: pd.DataFrame):
     df.to_csv(BASE_PATH, index=False, encoding="utf-8")
+    success = backup_user_file(BASE_PATH, "Actualizar base de corrales")
+    audit_log_append(
+        "save_base",
+        "Base de corrales actualizada",
+        path=str(BASE_PATH),
+        meta={"github_backup": success},
+    )
 
 
 def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
@@ -907,10 +1150,29 @@ with tab_corrales:
                 for col in ["kg_turno_calc", "kg_turno_asfed_calc"]:
                     if col in out.columns:
                         out = out.drop(columns=[col])
-                save_base(out)
-                st.success("Base guardada.")
-                st.toast("Base actualizada.", icon="📦")
-                rerun_with_cache_reset()
+                out_to_save = out.copy()
+                mask_nonempty = pd.Series(False, index=out_to_save.index)
+                if "nro_corral" in out_to_save.columns:
+                    mask_nonempty |= out_to_save["nro_corral"].notna()
+                if "nombre_racion" in out_to_save.columns:
+                    mask_nonempty |= out_to_save["nombre_racion"].astype(str).str.strip() != ""
+                if "nro_cab" in out_to_save.columns:
+                    mask_nonempty |= pd.to_numeric(out_to_save["nro_cab"], errors="coerce").fillna(0) > 0
+                used_rows = out_to_save[mask_nonempty]
+                if len(used_rows) > MAX_CORRALES:
+                    st.error(f"Máximo permitido: {MAX_CORRALES} corrales. Estás intentando guardar {len(used_rows)}.")
+                    audit_log_append(
+                        "save_base_blocked",
+                        "Supera máximo de corrales",
+                        status="blocked",
+                        path=str(BASE_PATH),
+                        meta={"rows": int(len(used_rows))},
+                    )
+                else:
+                    save_base(out_to_save)
+                    st.success("Base guardada.")
+                    st.toast("Base actualizada.", icon="📦")
+                    rerun_with_cache_reset()
             if refresh:
                 rerun_with_cache_reset()
 
@@ -932,36 +1194,54 @@ with tab_alimentos:
                 key="alimentos_import_file",
             )
             if uploaded is not None:
-                try:
-                    uploaded.seek(0)
-                    if uploaded.name.lower().endswith((".xlsx", ".xls")):
-                        raw_df = pd.read_excel(uploaded)
-                    else:
-                        uploaded.seek(0)
-                        raw_df = pd.read_csv(uploaded, encoding="utf-8-sig")
-                except Exception as exc:
-                    st.error(f"No se pudo leer el archivo: {exc}")
-                else:
+                if validate_upload_size(uploaded, label="Planilla de alimentos"):
                     try:
-                        df_norm = normalize_alimentos(raw_df)
-                    except ValueError as exc:
-                        st.error(str(exc))
+                        uploaded.seek(0)
+                        if uploaded.name.lower().endswith((".xlsx", ".xls")):
+                            raw_df = pd.read_excel(uploaded)
+                        else:
+                            uploaded.seek(0)
+                            raw_df = pd.read_csv(uploaded, encoding="utf-8-sig")
+                    except Exception as exc:
+                        st.error(f"No se pudo leer el archivo: {exc}")
+                        audit_log_append(
+                            "import_alimentos_error",
+                            f"Lectura fallida de {uploaded.name}",
+                            status="error",
+                            meta={"error": str(exc)},
+                        )
                     else:
-                        st.dataframe(df_norm.head(20), use_container_width=True)
-                        st.caption(f"Filas: {len(df_norm)} — Columnas: {len(df_norm.columns)}")
-                        dropped = int(df_norm.attrs.get("discarded_rows", 0))
-                        if dropped > 0:
-                            st.warning(f"Se descartaron {dropped} filas sin ORIGEN válido.")
+                        try:
+                            df_norm = normalize_alimentos(raw_df)
+                        except ValueError as exc:
+                            st.error(str(exc))
+                            audit_log_append(
+                                "import_alimentos_error",
+                                f"Normalización fallida {uploaded.name}",
+                                status="error",
+                                meta={"error": str(exc)},
+                            )
+                        else:
+                            st.dataframe(df_norm.head(20), use_container_width=True)
+                            st.caption(f"Filas: {len(df_norm)} — Columnas: {len(df_norm.columns)}")
+                            dropped = int(df_norm.attrs.get("discarded_rows", 0))
+                            if dropped > 0:
+                                st.warning(f"Se descartaron {dropped} filas sin ORIGEN válido.")
 
-                        if st.button(
-                            "💾 Cargar y reemplazar catálogo actual",
-                            type="primary",
-                            key="import_replace_alimentos",
-                        ):
-                            save_alimentos(df_norm)
-                            st.success("Catálogo actualizado y guardado.")
-                            st.toast("Alimentos cargados correctamente.", icon="🧾")
-                            rerun_with_cache_reset()
+                            if st.button(
+                                "💾 Cargar y reemplazar catálogo actual",
+                                type="primary",
+                                key="import_replace_alimentos",
+                            ):
+                                save_alimentos(df_norm)
+                                st.success("Catálogo actualizado y guardado.")
+                                st.toast("Alimentos cargados correctamente.", icon="🧾")
+                                audit_log_append(
+                                    "import_alimentos",
+                                    f"Archivo {uploaded.name} importado",
+                                    meta={"rows": int(len(df_norm))},
+                                )
+                                rerun_with_cache_reset()
 
         with dropdown("Filtros avanzados"):
             c1, c2, c3 = st.columns(3)
@@ -1367,6 +1647,7 @@ with tab_export:
             "raciones_recipes.csv",
             "requerimientos_energeticos.csv",
             "requerimiento_proteico.csv",
+            "audit_log.csv",
         ]
         files_to_zip = [USER_DIR / fname for fname in names if (USER_DIR / fname).exists()]
 
@@ -1393,6 +1674,65 @@ with tab_export:
             )
         else:
             st.info("No se encontraron archivos en tu carpeta de usuario para exportar.")
+
+        st.markdown("---")
+        st.markdown("### 📤 Importar ZIP (restaurar backup)")
+        uploaded_zip = st.file_uploader(
+            "Seleccioná un ZIP exportado previamente",
+            type=["zip"],
+            key="import_zip_backup",
+        )
+        if uploaded_zip is not None and validate_upload_size(uploaded_zip, label="Backup ZIP"):
+            try:
+                uploaded_zip.seek(0)
+                with zipfile.ZipFile(uploaded_zip) as zf:
+                    restored: list[str] = []
+                    allowed = set(names)
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        safe_name = Path(info.filename).name
+                        if safe_name not in allowed:
+                            continue
+                        target = USER_DIR / safe_name
+                        data = zf.read(info)
+                        target.write_bytes(data)
+                        restored.append(safe_name)
+                        backup_user_file(target, f"Importar ZIP {uploaded_zip.name} -> {safe_name}")
+            except zipfile.BadZipFile:
+                st.error("El archivo no es un ZIP válido.")
+                audit_log_append(
+                    "import_zip_error",
+                    f"ZIP inválido: {uploaded_zip.name}",
+                    status="error",
+                )
+            except Exception as exc:
+                st.error(f"No se pudo procesar el ZIP: {exc}")
+                audit_log_append(
+                    "import_zip_error",
+                    f"Error restaurando {uploaded_zip.name}",
+                    status="error",
+                    meta={"error": str(exc)},
+                )
+            else:
+                if restored:
+                    st.success(
+                        "Backup restaurado. Se actualizaron: " + ", ".join(sorted(restored))
+                    )
+                    st.toast("Datos restaurados desde ZIP.", icon="📦")
+                    audit_log_append(
+                        "import_zip",
+                        f"ZIP {uploaded_zip.name} restaurado",
+                        meta={"files": restored},
+                    )
+                    rerun_with_cache_reset()
+                else:
+                    st.warning("No se encontraron archivos reconocidos en el ZIP.")
+                    audit_log_append(
+                        "import_zip_empty",
+                        f"ZIP {uploaded_zip.name} sin archivos válidos",
+                        status="warning",
+                    )
 
 # ------------------------------------------------------------------------------
 # ⚙️ Parámetros
