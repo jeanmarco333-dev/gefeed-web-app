@@ -63,6 +63,19 @@ ALIM_COLS = list(EXPECTED_ALIM_COLS)
 REQENER_COLS = ["peso", "cat", "requerimiento_energetico", "ap"]
 REQPROT_COLS = ["peso", "cat", "ap", "req_proteico"]
 
+SYNTHETIC_EM_COEFS = {
+    "novillos": {
+        "intercept": 0.0376962101,
+        "pv075": 0.0765280134,
+        "ap_pv": 1.49631094e-05,
+    },
+    "vaquillonas": {
+        "intercept": 0.0885280667,
+        "pv075": 0.0759192350,
+        "ap_pv": 8.32212548e-06,
+    },
+}
+
 
 def _num(x, default=0.0):
     try:
@@ -70,6 +83,31 @@ def _num(x, default=0.0):
         return default if pd.isna(val) else val
     except Exception:
         return default
+
+
+def synthetic_em_requirement(pv_kg: float, ap_kg_dia: float, categoria: str | None) -> float | None:
+    """Calcula EM (Mcal/día) con una fórmula sintética ajustada por categoría."""
+
+    pv = _num(pv_kg, 0.0)
+    ap = _num(ap_kg_dia, 0.0)
+    if pv <= 0:
+        return None
+
+    cat_key = (categoria or "").strip().lower()
+    if "vaq" in cat_key:
+        coeffs = SYNTHETIC_EM_COEFS["vaquillonas"]
+    elif "nov" in cat_key:
+        coeffs = SYNTHETIC_EM_COEFS["novillos"]
+    else:
+        coeffs = SYNTHETIC_EM_COEFS["novillos"]
+
+    pv075 = pv ** 0.75
+    value = (
+        coeffs["intercept"]
+        + coeffs["pv075"] * pv075
+        + coeffs["ap_pv"] * (pv * ap)
+    )
+    return round(max(value, 0.0), 3)
 
 # ------------------------------------------------------------------------------
 # Configuración global (debe ir antes de cualquier llamada a Streamlit)
@@ -1819,10 +1857,56 @@ with tab_parametros:
         if r2.button("🔄 Recargar requerimientos"):
             rerun_with_cache_reset()
 
+        with st.expander("📐 Comparar con fórmula sintética de EM", expanded=False):
+            eval_df = grid_req.copy()
+            eval_df["EM_formula"] = eval_df.apply(
+                lambda row: synthetic_em_requirement(
+                    row.get("peso"), row.get("ap"), row.get("cat")
+                ),
+                axis=1,
+            )
+            em_tabla = pd.to_numeric(
+                eval_df.get("requerimiento_energetico"), errors="coerce"
+            )
+            em_formula = pd.to_numeric(eval_df.get("EM_formula"), errors="coerce")
+            eval_df["Delta_tabla_formula"] = (em_tabla - em_formula).round(3)
+
+            display_cols = [
+                "peso",
+                "cat",
+                "ap",
+                "requerimiento_energetico",
+                "EM_formula",
+                "Delta_tabla_formula",
+            ]
+
+            st.dataframe(
+                eval_df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "peso": st.column_config.NumberColumn("PV (kg)", format="%.1f"),
+                    "cat": st.column_config.TextColumn("Categoría"),
+                    "ap": st.column_config.NumberColumn("AP (kg/día)", format="%.1f"),
+                    "requerimiento_energetico": st.column_config.NumberColumn(
+                        "Req. tabla (Mcal/día)", format="%.2f"
+                    ),
+                    "EM_formula": st.column_config.NumberColumn(
+                        "EM fórmula sintética (Mcal/día)", format="%.2f"
+                    ),
+                    "Delta_tabla_formula": st.column_config.NumberColumn(
+                        "Δ tabla - fórmula", format="%.2f"
+                    ),
+                },
+            )
+            st.caption(
+                "La fórmula sintética usa PV^0.75 y AP según la categoría para estimar Mcal/día."
+            )
+
         st.markdown("---")
         st.markdown("### Requerimientos proteicos (g PB/día)")
         reqprot_df = load_reqprot()
-        grid_reqprot = st.data_editor(
+        st.dataframe(
             reqprot_df,
             column_config={
                 "peso": st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=2000.0, step=0.5),
@@ -1830,16 +1914,12 @@ with tab_parametros:
                 "ap": st.column_config.NumberColumn("AP (kg/día)", min_value=0.0, max_value=20.0, step=0.1),
                 "req_proteico": st.column_config.NumberColumn("Req. proteico (g PB/día)", min_value=0.0, max_value=5000.0, step=1.0),
             },
-            num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
-            key="param_reqprot",
         )
-        rp1, rp2 = st.columns(2)
-        if rp1.button("💾 Guardar requerimientos proteicos", type="primary"):
-            save_reqprot(grid_reqprot); st.success("Requerimientos proteicos guardados."); st.toast("Req. PB actualizados.", icon="🧪"); rerun_with_cache_reset()
-        if rp2.button("🔄 Recargar requerimientos proteicos"):
+        if st.button("🔄 Recargar requerimientos proteicos", key="reload_reqprot"):
             rerun_with_cache_reset()
+        st.caption("Tabla fija: los valores se editan fuera de la aplicación.")
 
 # ------------------------------------------------------------------------------
 # 👤 Usuarios (Admin)
