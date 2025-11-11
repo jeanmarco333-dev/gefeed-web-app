@@ -18,6 +18,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -36,6 +37,10 @@ from calc_engine import (
 # --- AUTH (login por usuario/clave) ---
 import yaml
 import streamlit_authenticator as stauth
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
@@ -439,6 +444,79 @@ def _logo_block():
 
 _logo_block()
 st.caption("Stock corrales • Ajustes de raciones • Alimentos • Mixer • Parámetros • Export ZIP")
+THEME_LIGHT = {
+    "bg": "#f4ede2",
+    "card": "#fff9ef",
+    "text": "#2e473b",
+    "accent": "#8fa97b",
+    "brand1": "#2e473b",
+    "brand2": "#e3c07b",
+}
+THEME_DARK = {
+    "bg": "#0f1513",
+    "card": "#1b2320",
+    "text": "#e9efe6",
+    "accent": "#8fa97b",
+    "brand1": "#8fa97b",
+    "brand2": "#e3c07b",
+}
+
+
+def apply_theme() -> None:
+    th = THEME_DARK if st.session_state.get("theme") == "dark" else THEME_LIGHT
+    st.markdown(
+        f"""
+    <style>
+      .main {{ background-color: {th['bg']}; color: {th['text']}; }}
+      [data-testid="stAppViewContainer"] {{ background-color: {th['bg']}; color: {th['text']}; }}
+      [data-testid="stHeader"] {{
+        background: linear-gradient(90deg, {th['brand1']}, {th['brand2']});
+        color: white;
+      }}
+      .stButton>button {{
+        background-color:{th['brand1']}; color: #fff; border-radius:10px;
+        transition: filter .2s ease, transform .08s ease;
+      }}
+      .stButton>button:hover {{ filter: brightness(1.06); }}
+      .stButton>button:active {{ transform: scale(.98); }}
+      .card {{
+        background:{th['card']}; border:1px solid rgba(0,0,0,.06); border-radius:14px;
+        padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:8px 0;
+      }}
+      h1, h2, h3, h4 {{ color: {th['brand1']} !important; }}
+      body {{ color: {th['text']}; background-color: {th['bg']}; }}
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_theme()
+
+
+def _logo_block() -> None:
+    logo_path = Path("assets/logo.png")
+    if logo_path.exists():
+        try:
+            b64 = base64.b64encode(logo_path.read_bytes()).decode()
+        except Exception:
+            b64 = None
+        if b64:
+            st.markdown(
+                f"""
+        <div style="display:flex;align-items:center;gap:.75rem;margin:.25rem 0 1rem 0;">
+          <img src="data:image/png;base64,{b64}" height="36" />
+          <div style="font-weight:700; letter-spacing:.4px;">JM P-Feedlot v0.26 — Web</div>
+        </div>
+        """,
+                unsafe_allow_html=True,
+            )
+            return
+    st.markdown("### JM P-Feedlot v0.26 — Web")
+
+
+_logo_block()
+
 st.info("🚧 Versión beta sin costo: validando con clientes iniciales. Guardá y exportá seguido por seguridad.")
 
 # ------------------------------------------------------------------------------
@@ -1890,6 +1968,60 @@ if USER_IS_ADMIN and admin_tabs:
     elif len(admin_tabs) == 1:
         # Solo se definió la pestaña de usuarios (compatibilidad defensiva)
         tab_admin = admin_tabs[0]
+
+with tab_home:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Resumen operativo")
+    snap = metrics_get_snapshot() if "metrics_get_snapshot" in globals() else {
+        "visits_total": 0,
+        "simulations_total": 0,
+        "today_visits": 0,
+        "today_simulations": 0,
+        "last_update": None,
+    }
+    base_df = load_base()
+    total_animales = 0
+    va = 0
+    nov = 0
+    if not base_df.empty:
+        base_df["nro_cab"] = pd.to_numeric(base_df.get("nro_cab", 0), errors="coerce").fillna(0).astype(int)
+        total_animales = int(base_df["nro_cab"].sum())
+        base_df["categ"] = base_df.get("categ", "").astype(str).str.lower().str.strip()
+        va = int(base_df.loc[base_df["categ"].str.startswith("va"), "nro_cab"].sum())
+        nov = int(base_df.loc[base_df["categ"].str.startswith("nov"), "nro_cab"].sum())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Visitas (hoy)", snap.get("today_visits", 0))
+    c2.metric("Simulaciones (hoy)", snap.get("today_simulations", 0))
+    c3.metric("Animales totales", f"{total_animales:,}")
+    c4.metric("Vaquillonas / Nov.", f"{va:,} / {nov:,}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    mpath = user_path("metrics.json")
+    if mpath.exists():
+        try:
+            data = json.loads(mpath.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        sim_by_day = data.get("simulations_by_day", {}) if isinstance(data, dict) else {}
+        if sim_by_day:
+            df_plot = (
+                pd.DataFrame([{"fecha": k, "sim": v} for k, v in sim_by_day.items()])
+                .sort_values("fecha")
+            )
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("Simulaciones por día")
+            fig = plt.figure()
+            plt.plot(df_plot["fecha"], df_plot["sim"], marker="o")
+            plt.xticks(rotation=45, ha="right")
+            plt.ylabel("Simulaciones")
+            plt.xlabel("Fecha")
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("Aún no hay datos de simulaciones para graficar.")
+    else:
+        st.info("Aún no hay datos de simulaciones para graficar.")
 
 # ------------------------------------------------------------------------------
 # 📊 Stock & Corrales (principal)
@@ -3455,6 +3587,16 @@ with tab_raciones:
             pv_value = _num(pv_input, 0.0)
             cv_value = _num(cv_input, 0.0)
             consumo_ms = pv_value * (cv_value / 100.0)
+            categoria_req = categoria_val
+            if selected_corral is not None:
+                categoria_req = str(selected_corral.get("categ", categoria_req) or categoria_req)
+            ap_value = (
+                _num_or_none(selected_corral.get("ap_preten"))
+                if selected_corral is not None
+                else None
+            )
+            em_req_val = compute_requirement_em(pv_value, ap_value, categoria_req) or 0.0
+            pb_req_val = compute_requirement_pb(pv_value, ap_value, categoria_req) or 0.0
             params_cols[3].metric("CV MS (kg)", f"{consumo_ms:.2f}")
 
             rec_edit_cols = ["ingrediente", "pct_ms"]
@@ -3498,12 +3640,6 @@ with tab_raciones:
                 elif alimentos_df.empty:
                     st.warning("No hay catálogo de alimentos cargado.")
                 else:
-                    categoria_req = categoria_val
-                    if selected_corral is not None:
-                        categoria_req = str(selected_corral.get("categ", categoria_req) or categoria_req)
-                    ap_value = _num_or_none(selected_corral.get("ap_preten")) if selected_corral is not None else None
-                    em_req_val = compute_requirement_em(pv_value, ap_value, categoria_req) or 0.0
-                    pb_req_val = compute_requirement_pb(pv_value, ap_value, categoria_req) or 0.0
                     df_auto, res_auto = optimize_ration(
                         alimentos_df=alimentos_df,
                         disponibles=disp,
