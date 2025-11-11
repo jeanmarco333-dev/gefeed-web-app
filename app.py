@@ -249,8 +249,6 @@ if auth_status is False:
 elif auth_status is None:
     st.info("Ingresá tus credenciales"); st.stop()
 
-metrics_increment_visit(username)
-
 user_profile = {}
 credentials_cfg = (CFG.get("credentials") or {}).get("usernames", {})
 if isinstance(credentials_cfg, dict):
@@ -558,6 +556,9 @@ def metrics_get_snapshot() -> dict:
         "today_simulations": int(metrics.get("simulations_by_day", {}).get(today, 0) or 0),
         "last_update": metrics.get("last_update"),
     }
+
+
+metrics_increment_visit(username)
 
 MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
