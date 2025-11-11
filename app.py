@@ -384,9 +384,9 @@ def inject_theme_styles(dark_mode: bool) -> None:
             font-weight: 600;
         }}
 
-        .stMarkdown a:hover {
+        .stMarkdown a:hover {{
             text-decoration: none;
-        }
+        }}
         </style>
         """
     )
