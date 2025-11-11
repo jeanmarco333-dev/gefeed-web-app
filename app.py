@@ -18,6 +18,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import requests
@@ -27,7 +28,9 @@ from calc_engine import (
     Food,
     Ingredient,
     mixer_kg_by_ingredient,
+    optimize_ration,
     ration_split_from_pv_cv,
+    sugerencia_balance,
 )
 # --- AUTH (login por usuario/clave) ---
 import yaml
@@ -87,6 +90,102 @@ def _num(x, default=0.0):
         return default if pd.isna(val) else val
     except Exception:
         return default
+
+
+def _num_or_none(x):
+    try:
+        val = float(pd.to_numeric(x, errors="coerce"))
+    except Exception:
+        return None
+    if pd.isna(val):
+        return None
+    return val
+
+
+def _interpolate_requirement(
+    df: pd.DataFrame,
+    peso_kg: float,
+    ap_kg_dia: float | None,
+    categoria: str | None,
+    value_col: str,
+) -> float | None:
+    if df is None or df.empty or value_col not in df.columns:
+        return None
+
+    work = df.copy()
+    work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
+    work["peso"] = pd.to_numeric(work.get("peso"), errors="coerce")
+    if "ap" in work.columns:
+        work["ap"] = pd.to_numeric(work.get("ap"), errors="coerce")
+    else:
+        work["ap"] = np.nan
+    work["cat"] = work.get("cat", pd.Series(dtype=str)).fillna("").astype(str)
+    work = work.dropna(subset=["peso", value_col])
+    if work.empty:
+        return None
+
+    cat_key = (categoria or "").strip().lower()
+    if cat_key:
+        subset = work[work["cat"].str.lower() == cat_key]
+        if subset.empty:
+            subset = work
+    else:
+        subset = work
+
+    peso_val = _num_or_none(peso_kg)
+    if peso_val is None or peso_val <= 0:
+        return None
+    ap_val = _num_or_none(ap_kg_dia)
+
+    def _idw(rows: pd.DataFrame, use_ap: bool) -> float | None:
+        weights: list[float] = []
+        values: list[float] = []
+        for _, r in rows.iterrows():
+            val = _num_or_none(r.get(value_col))
+            peso_r = _num_or_none(r.get("peso"))
+            if val is None or peso_r is None:
+                continue
+            if use_ap:
+                ap_r = _num_or_none(r.get("ap"))
+                if ap_r is None or ap_val is None:
+                    continue
+                dp = peso_val - peso_r
+                da = ap_val - ap_r
+                dist = float((dp ** 2 + da ** 2) ** 0.5)
+            else:
+                dist = abs(peso_val - peso_r)
+            if dist < 1e-6:
+                return float(val)
+            weights.append(1.0 / (dist + 1e-6))
+            values.append(float(val))
+        if weights:
+            return float(np.dot(weights, values) / np.sum(weights))
+        return None
+
+    if ap_val is not None and subset["ap"].notna().any():
+        with_ap = subset.dropna(subset=["ap"])
+        val = _idw(with_ap, True)
+        if val is not None:
+            return val
+
+    val = _idw(subset, False)
+    return val
+
+
+def compute_requirement_em(pv_kg: float, ap_kg_dia: float | None, categoria: str | None) -> float | None:
+    req_df = load_reqener()
+    val = _interpolate_requirement(req_df, pv_kg, ap_kg_dia, categoria, "requerimiento_energetico")
+    if val is None:
+        return synthetic_em_requirement(pv_kg, ap_kg_dia or 0.0, categoria)
+    return float(val)
+
+
+def compute_requirement_pb(pv_kg: float, ap_kg_dia: float | None, categoria: str | None) -> float | None:
+    req_df = load_reqprot()
+    val = _interpolate_requirement(req_df, pv_kg, ap_kg_dia, categoria, "req_proteico")
+    if val is None:
+        return None
+    return float(val)
 
 
 def synthetic_em_requirement(pv_kg: float, ap_kg_dia: float, categoria: str | None) -> float | None:
@@ -703,6 +802,9 @@ def save_mixer_simulation_snapshot(
         "archivo_csv": fpath.name,
         "resumen_kg_dia": resumen_json,
         "comentario": comment,
+        "em_calc": np.nan,
+        "pb_calc": np.nan,
+        "cost_total": np.nan,
     }
 
     if MIXER_SIM_LOG.exists():
@@ -3257,14 +3359,200 @@ with tab_raciones:
             consumo_ms = pv_value * (cv_value / 100.0)
             params_cols[3].metric("CV MS (kg)", f"{consumo_ms:.2f}")
 
+            rec_edit_cols = ["ingrediente", "pct_ms"]
+            auto_recipe_key = f"auto_recipe_{rid}"
+            auto_df_key = f"auto_ration_df_{rid}"
+            auto_summary_key = f"auto_ration_summary_{rid}"
+
+            st.markdown("### 🧠 Sugerir ración automática")
+            col_auto_a, col_auto_b = st.columns(2)
+            aplicar_atc = col_auto_a.toggle(
+                "Aplicar COEF ATC al tal cual",
+                value=False,
+                key=f"auto_apply_atc_{rid}",
+            )
+            max_ing = col_auto_b.number_input(
+                "Máx. ingredientes",
+                min_value=2,
+                max_value=6,
+                value=6,
+                step=1,
+                key=f"auto_max_ing_{rid}",
+            )
+
+            w_em = st.slider("Peso EM", 0.0, 3.0, 1.0, 0.1, key=f"auto_w_em_{rid}")
+            w_pb = st.slider("Peso PB", 0.0, 3.0, 1.0, 0.1, key=f"auto_w_pb_{rid}")
+            w_cst = st.slider("Peso costo", 0.0, 1.0, 0.15, 0.05, key=f"auto_w_cost_{rid}")
+
+            disponibles_opts = sorted([opt for opt in opciones_ingred if opt])
+            disp = st.multiselect(
+                "Alimentos disponibles",
+                options=disponibles_opts,
+                default=disponibles_opts,
+                key=f"auto_disp_{rid}",
+            )
+
+            if st.button("🧠 Generar ración por aproximación", type="primary", key=f"auto_btn_{rid}"):
+                if consumo_ms <= 0:
+                    st.warning("Definí PV y CV mayores a 0 para calcular la ración automática.")
+                elif not disp:
+                    st.warning("Seleccioná al menos un alimento disponible para optimizar.")
+                elif alimentos_df.empty:
+                    st.warning("No hay catálogo de alimentos cargado.")
+                else:
+                    categoria_req = categoria_val
+                    if selected_corral is not None:
+                        categoria_req = str(selected_corral.get("categ", categoria_req) or categoria_req)
+                    ap_value = _num_or_none(selected_corral.get("ap_preten")) if selected_corral is not None else None
+                    em_req_val = compute_requirement_em(pv_value, ap_value, categoria_req) or 0.0
+                    pb_req_val = compute_requirement_pb(pv_value, ap_value, categoria_req) or 0.0
+                    df_auto, res_auto = optimize_ration(
+                        alimentos_df=alimentos_df,
+                        disponibles=disp,
+                        consumo_ms_dia=consumo_ms,
+                        em_req_mcal_dia=float(em_req_val),
+                        pb_req_g_dia=float(pb_req_val),
+                        max_ingredientes=int(max_ing),
+                        pesos_obj={"em": w_em, "pb": w_pb, "cost": w_cst},
+                        aplicar_coef_atc=aplicar_atc,
+                    )
+                    if res_auto.get("status") != "ok" or df_auto.empty:
+                        st.warning(res_auto.get("msg", "No se pudo optimizar la ración."))
+                        st.session_state.pop(auto_df_key, None)
+                        st.session_state.pop(auto_summary_key, None)
+                    else:
+                        tips = sugerencia_balance(
+                            float(res_auto.get("em_calc", 0.0)),
+                            float(em_req_val),
+                            float(res_auto.get("pb_calc", 0.0)),
+                            float(pb_req_val),
+                        )
+                        df_rec_out = df_auto[["ingrediente", "pct_ms"]].head(int(max_ing)).copy()
+                        df_rec_out = df_rec_out.reset_index(drop=True)
+                        while len(df_rec_out) < 6:
+                            df_rec_out.loc[len(df_rec_out)] = {"ingrediente": "", "pct_ms": 0.0}
+                        st.session_state[auto_recipe_key] = df_rec_out[rec_edit_cols].copy()
+                        st.session_state[auto_df_key] = df_auto.copy()
+                        cabezas = _num(selected_corral.get("nro_cab"), 0.0) if selected_corral is not None else 0.0
+                        costo_total_val = float(res_auto.get("cost_total", 0.0))
+                        em_calc_val = float(res_auto.get("em_calc", 0.0))
+                        pb_calc_val = float(res_auto.get("pb_calc", 0.0))
+                        costo_por_cabeza = (costo_total_val / cabezas) if cabezas > 0 else None
+                        costo_por_mcal = (costo_total_val / em_calc_val) if em_calc_val > 0 else None
+                        pb_kg = pb_calc_val / 1000.0 if pb_calc_val > 0 else 0.0
+                        costo_por_kg_pb = (costo_total_val / pb_kg) if pb_kg > 0 else None
+                        st.session_state[auto_summary_key] = {
+                            "resumen": res_auto,
+                            "em_req": float(em_req_val),
+                            "pb_req": float(pb_req_val),
+                            "consumo_ms": consumo_ms,
+                            "tips": tips,
+                            "costo_por_cabeza": costo_por_cabeza,
+                            "costo_por_mcal": costo_por_mcal,
+                            "costo_por_kg_pb": costo_por_kg_pb,
+                            "cabezas": cabezas,
+                            "aplicado_atc": bool(aplicar_atc),
+                            "categoria": categoria_req,
+                            "pv_kg": pv_value,
+                            "cv_pct": cv_value,
+                            "ap_kg_dia": ap_value if ap_value is not None else 0.0,
+                        }
+                        st.success("Ración sugerida generada.")
+
+            auto_df = st.session_state.get(auto_df_key)
+            auto_summary = st.session_state.get(auto_summary_key)
+            if isinstance(auto_summary, dict) and isinstance(auto_summary.get("resumen"), dict):
+                res_auto = auto_summary.get("resumen", {})
+                em_calc_val = float(res_auto.get("em_calc", 0.0))
+                pb_calc_val = float(res_auto.get("pb_calc", 0.0))
+                costo_total_val = float(res_auto.get("cost_total", 0.0))
+                asfed_total_val = float(res_auto.get("asfed_total_kg_dia", 0.0))
+                em_req_val = float(auto_summary.get("em_req", 0.0))
+                pb_req_val = float(auto_summary.get("pb_req", 0.0))
+                consumo_ms_val = float(auto_summary.get("consumo_ms", consumo_ms))
+                if isinstance(auto_df, pd.DataFrame) and not auto_df.empty:
+                    st.dataframe(auto_df, use_container_width=True, hide_index=True)
+                st.info(
+                    f"""**Resumen**
+- EM calculada: **{em_calc_val:.2f} Mcal/día** (req {em_req_val:.2f})
+- PB calculada: **{pb_calc_val:.0f} g/día** (req {pb_req_val:.0f})
+- As-fed total: **{asfed_total_val:.2f} kg/día**
+- Consumo MS objetivo: **{consumo_ms_val:.2f} kg/día**
+- Costo total: **$ {costo_total_val:.2f}**"""
+                )
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Costo total (día)", f"$ {costo_total_val:.2f}")
+                costo_cabeza_val = auto_summary.get("costo_por_cabeza")
+                metric_cols[1].metric(
+                    "Costo por cabeza (día)",
+                    f"$ {costo_cabeza_val:.2f}" if isinstance(costo_cabeza_val, (float, int)) and costo_cabeza_val is not None else "s/d",
+                )
+                costo_em_val = auto_summary.get("costo_por_mcal")
+                metric_cols[2].metric(
+                    "$ por Mcal EM",
+                    f"$ {costo_em_val:.2f}" if isinstance(costo_em_val, (float, int)) and costo_em_val is not None else "s/d",
+                )
+                costo_pb_val = auto_summary.get("costo_por_kg_pb")
+                metric_cols[3].metric(
+                    "$ por kg PB",
+                    f"$ {costo_pb_val:.2f}" if isinstance(costo_pb_val, (float, int)) and costo_pb_val is not None else "s/d",
+                )
+                for tip in auto_summary.get("tips", []):
+                    st.write("• " + tip)
+
+                if MIXER_SIM_LOG.exists():
+                    try:
+                        logdf = pd.read_csv(MIXER_SIM_LOG, encoding="utf-8-sig")
+                    except Exception as exc:
+                        st.caption(f"No se pudo leer mixer_sim_log.csv ({exc}).")
+                    else:
+                        last = logdf.sort_values("ts", ascending=False).head(1)
+                        if not last.empty:
+                            def _last_val(col: str) -> float:
+                                if col not in last.columns:
+                                    return np.nan
+                                series = pd.to_numeric(last[col], errors="coerce")
+                                if series.empty:
+                                    return np.nan
+                                val = series.iloc[0]
+                                return float(val) if not pd.isna(val) else np.nan
+
+                            em_prev = _last_val("em_calc")
+                            pb_prev = _last_val("pb_calc")
+                            cost_prev = _last_val("cost_total")
+
+                            def _pct(delta: float, base: float) -> float:
+                                if base is None or np.isnan(base) or abs(base) < 1e-6:
+                                    return np.nan
+                                return (delta / base) * 100.0
+
+                            pct_em = _pct(em_calc_val - em_prev, em_prev)
+                            pct_pb = _pct(pb_calc_val - pb_prev, pb_prev)
+                            pct_cost = _pct(costo_total_val - cost_prev, cost_prev)
+
+                            def _fmt_pct(val: float) -> str:
+                                return f"{val:+.1f}%" if not np.isnan(val) else "s/d"
+
+                            st.caption("Comparación con la última simulación guardada:")
+                            st.write(
+                                f"- Δ EM: {_fmt_pct(pct_em)}  |  Δ PB: {_fmt_pct(pct_pb)}  |  Δ Costo: {_fmt_pct(pct_cost)}"
+                            )
+                        else:
+                            st.caption("Aún no hay simulaciones registradas para comparar.")
+
             colcfg = {
                 "ingrediente": st.column_config.SelectboxColumn("Ingrediente (ORIGEN)", options=opciones_ingred),
                 "pct_ms": st.column_config.NumberColumn("% inclusión (MS)", min_value=0.0, max_value=100.0, step=0.1)
             }
 
-            rec_edit_cols = ["ingrediente","pct_ms"]
+            editor_source = st.session_state.get(auto_recipe_key)
+            if isinstance(editor_source, pd.DataFrame) and not editor_source.empty:
+                base_editor = editor_source.copy()
+            else:
+                base_editor = rec_r[rec_edit_cols].copy()
+
             grid_rec = st.data_editor(
-                rec_r[rec_edit_cols],
+                base_editor,
                 column_config=colcfg,
                 column_order=rec_edit_cols,
                 use_container_width=True,
@@ -3277,6 +3565,7 @@ with tab_raciones:
                 grid_rec["ingrediente"] = ""
             if "pct_ms" not in grid_rec.columns:
                 grid_rec["pct_ms"] = 0.0
+            st.session_state[auto_recipe_key] = grid_rec[rec_edit_cols].copy()
 
             total_pct = float(pd.to_numeric(grid_rec["pct_ms"], errors="coerce").fillna(0.0).sum())
             st.progress(min(int(total_pct), 100), text=f"Suma MS: {total_pct:.1f}%")
