@@ -23,6 +23,7 @@ import pandas as pd
 import streamlit as st
 import requests
 import qrcode
+import matplotlib.pyplot as plt
 
 from calc_engine import (
     Food,
@@ -35,6 +36,9 @@ from calc_engine import (
 # --- AUTH (login por usuario/clave) ---
 import yaml
 import streamlit_authenticator as stauth
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
 
 # ------------------------------------------------------------------------------
 # Paths (multiusuario)
@@ -219,13 +223,6 @@ st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
 
 CFG_PATH = Path("config_users.yaml")  # opcional (dev local o repo privado)
 
-# ------------------------------------------------------------------------------
-# Preferencias de UI (persistidas en sesión)
-# ------------------------------------------------------------------------------
-if "dark_mode" not in st.session_state:
-    st.session_state["dark_mode"] = False
-
-
 def load_base_cfg():
     """Carga credenciales base: YAML en repo o st.secrets (solo lectura)."""
     if CFG_PATH.exists():
@@ -359,39 +356,105 @@ user_email = str(user_profile.get("email", "") or "").strip()
 if user_email:
     st.session_state["email"] = user_email
 
+# ---------- TEMA GANADERO ----------
+THEME_LIGHT = {
+    "bg": "#f4ede2",
+    "card": "#fff9ef",
+    "text": "#2e473b",
+    "accent": "#8fa97b",
+    "brand1": "#2e473b",
+    "brand2": "#e3c07b",
+}
+THEME_DARK = {
+    "bg": "#0f1513",
+    "card": "#1b2320",
+    "text": "#e9efe6",
+    "accent": "#8fa97b",
+    "brand1": "#8fa97b",
+    "brand2": "#e3c07b",
+}
+
+if "theme" not in st.session_state:
+    st.session_state["theme"] = "light"
+
 with st.sidebar:
     st.title("⚙️ Opciones")
     st.write(f"👤 {name} (@{username})")
-    toggle_label = (
-        "☀️ Desactivar modo oscuro"
-        if st.session_state["dark_mode"]
-        else "🌙 Activar modo oscuro"
-    )
-    if st.button(toggle_label, key="toggle_dark_mode"):
-        st.session_state["dark_mode"] = not st.session_state["dark_mode"]
+    st.markdown("### Apariencia")
+    dark = st.toggle("🌙 Tema oscuro", value=(st.session_state["theme"] == "dark"))
+    st.session_state["theme"] = "dark" if dark else "light"
 
 authenticator.logout("Salir", "sidebar")
 APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
-st.title(APP_VERSION)
+
+
+def apply_theme():
+    th = THEME_DARK if st.session_state["theme"] == "dark" else THEME_LIGHT
+    st.markdown(
+        f"""
+    <style>
+      .main {{ background-color: {th['bg']}; color: {th['text']}; }}
+      [data-testid="stHeader"] {{ 
+        background: linear-gradient(90deg, {th['brand1']}, {th['brand2']}); 
+        color: white; 
+      }}
+      .stButton>button {{
+        background-color:{th['brand1']}; color: #fff; border-radius:10px; 
+        transition: filter .2s ease, transform .08s ease;
+      }}
+      .stButton>button:hover {{ filter: brightness(1.06); }}
+      .stButton>button:active {{ transform: scale(.98); }}
+      .card {{
+        background:{th['card']}; border:1px solid rgba(0,0,0,.06); border-radius:14px; 
+        padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:8px 0;
+      }}
+      h1, h2, h3, h4 {{ color: {th['brand1']} !important; }}
+      body, .stApp {{ background-color: {th['bg']}; color: {th['text']}; }}
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_theme()
+
+
+def _logo_block():
+    logo_path = "assets/logo.png"
+    if os.path.exists(logo_path):
+        img = Path(logo_path).read_bytes()
+        b64 = base64.b64encode(img).decode()
+        st.markdown(
+            f"""
+        <div style="display:flex;align-items:center;gap:.75rem;margin:.25rem 0 1rem 0;">
+          <img src="data:image/png;base64,{b64}" height="36" />
+          <div style="font-weight:700; letter-spacing:.4px;">JM P-Feedlot v0.26 — Web</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("### JM P-Feedlot v0.26 — Web")
+
+
+_logo_block()
 st.caption("Stock corrales • Ajustes de raciones • Alimentos • Mixer • Parámetros • Export ZIP")
 st.info("🚧 Versión beta sin costo: validando con clientes iniciales. Guardá y exportá seguido por seguridad.")
 
 # ------------------------------------------------------------------------------
 # CSS (transiciones, tarjetas, dropdowns, micro-interacciones)
 # ------------------------------------------------------------------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
 .section-enter { opacity:0; transform: translateY(4px); animation: fadeSlideIn .25s ease-out forwards; }
 @keyframes fadeSlideIn { to { opacity:1; transform:none; } }
 
-.card     { padding:16px; border:1px solid #E5E7EB; border-radius:14px;
-            box-shadow:0 1px 2px rgba(0,0,0,.03); margin:6px 0;
-            transition: box-shadow .2s ease, transform .2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.07); }
+.card { transition: box-shadow .2s ease, transform .2s ease; }
+.card:hover { transform: translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12); }
 
 .stButton>button { transition: transform .08s ease, filter .2s ease; }
 .stButton>button:active { transform: scale(.98); }
-.stButton>button:hover  { filter: brightness(1.03); }
 
 details > summary { cursor:pointer; list-style:none; transition: color .2s ease; }
 details > summary::-webkit-details-marker { display:none; }
@@ -403,137 +466,9 @@ details[open] .expander-body { animation: fadeIn .2s ease both; }
 .chip-ok  { background:#DCFCE7; color:#166534; padding:4px 8px; border-radius:999px; font-size:.85rem; }
 .chip-bad { background:#FEE2E2; color:#991B1B; padding:4px 8px; border-radius:999px; font-size:.85rem; }
 </style>
-""", unsafe_allow_html=True)
-
-if st.session_state["dark_mode"]:
-    st.markdown(
-        """
-        <style>
-        html, body, .stApp {
-            background-color: #121212;
-            color: #EAEAEA;
-        }
-        [data-testid="stAppViewContainer"] {
-            background-color: #1B1B1B;
-            color: #EAEAEA;
-        }
-        .main {
-            background-color: #1B1B1B;
-            color: #EAEAEA;
-        }
-        div[data-testid="stHeader"] {
-            background: linear-gradient(90deg, #3E2723, #1B1B1B);
-            color: #F5F0E6;
-        }
-        .card {
-            background: #242424;
-            border-color: #3A3A3A;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-        }
-        .card:hover {
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.60);
-        }
-        .stButton>button {
-            background-color: #4E342E;
-            color: #FFF;
-            border-radius: 8px;
-        }
-        .stButton>button:hover {
-            background-color: #6D4C41;
-        }
-        h1, h2, h3 {
-            color: #E0C097 !important;
-        }
-        [data-testid="stDataEditor"] thead tr th {
-            background: #2A2623;
-            color: #F5F0E6;
-            border-bottom: 2px solid #4E3B33;
-        }
-        [data-testid="stDataEditor"] thead tr th:first-child {
-            background: #3B2F29;
-        }
-        [data-testid="stDataEditor"] thead tr th:nth-child(2) {
-            background: #393224;
-        }
-        [data-testid="stDataEditor"] thead tr th:nth-child(3) {
-            background: #2F3A2C;
-        }
-        [data-testid="stDataEditor"] thead tr th:hover {
-            filter: brightness(1.08);
-        }
-        a {
-            color: #E0C097;
-        }
-        :root {
-            color-scheme: dark;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-else:
-    st.markdown(
-        """
-        <style>
-        html, body, .stApp {
-            background-color: #F5F0E6;
-            color: #3E2723;
-        }
-        [data-testid="stAppViewContainer"] {
-            background-color: #F5F0E6;
-            color: #3E2723;
-        }
-        .main {
-            background-color: #F5F0E6;
-            color: #3E2723;
-        }
-        div[data-testid="stHeader"] {
-            background: linear-gradient(90deg, #6D4C41, #4E342E);
-            color: #FFFFFF;
-        }
-        .card {
-            background: #FFFFFF;
-            border-color: #D7CCC8;
-        }
-        .card:hover {
-            box-shadow: 0 6px 18px rgba(109, 78, 65, 0.18);
-        }
-        .stButton>button {
-            background-color: #6D4C41;
-            color: #FFF;
-            border-radius: 8px;
-        }
-        .stButton>button:hover {
-            background-color: #8D6E63;
-        }
-        h1, h2, h3 {
-            color: #4E342E !important;
-        }
-        [data-testid="stDataEditor"] thead tr th {
-            background: #EFE5DA;
-            color: #3E2723;
-            border-bottom: 2px solid #D7CCC8;
-        }
-        [data-testid="stDataEditor"] thead tr th:first-child {
-            background: #E8D3C1;
-        }
-        [data-testid="stDataEditor"] thead tr th:nth-child(2) {
-            background: #E3E0CF;
-        }
-        [data-testid="stDataEditor"] thead tr th:nth-child(3) {
-            background: #E2EBE1;
-        }
-        [data-testid="stDataEditor"] thead tr th:hover {
-            filter: brightness(0.98);
-        }
-        a {
-            color: #4E342E;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
+""",
+    unsafe_allow_html=True,
+)
 # Helpers de UI
 @contextmanager
 def card(title: str, subtitle: str | None = None, icon: str = ""):
@@ -552,6 +487,106 @@ def dropdown(title: str, open: bool=False):
 def chip(text: str, ok: bool=True):
     klass = "chip-ok" if ok else "chip-bad"
     st.markdown(f'<span class="{klass}">{text}</span>', unsafe_allow_html=True)
+
+
+def generate_summary_pdf(
+    file_path: Path,
+    logo_path: str | None,
+    titulo: str,
+    datos: dict,
+    tabla_detalle: pd.DataFrame | None = None,
+):
+    c = canvas.Canvas(str(file_path), pagesize=A4)
+    W, H = A4
+    y = H - 2 * cm
+
+    try:
+        if logo_path and os.path.exists(logo_path):
+            c.drawImage(
+                logo_path,
+                x=2 * cm,
+                y=y - 2 * cm,
+                width=3 * cm,
+                height=2 * cm,
+                preserveAspectRatio=True,
+                mask="auto",
+            )
+    except Exception:
+        pass
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(6 * cm, y - 0.5 * cm, titulo)
+
+    c.setFont("Helvetica", 9)
+    c.drawString(6 * cm, y - 1.2 * cm, datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+    y -= 3 * cm
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(2 * cm, y, "Resumen")
+    c.setFont("Helvetica", 10)
+    y -= 0.5 * cm
+
+    for k in [
+        "Ración",
+        "PV (kg)",
+        "CV (%)",
+        "Consumo MS (kg/día)",
+        "EM calculada (Mcal/d)",
+        "EM requerida (Mcal/d)",
+        "PB calculada (g/d)",
+        "PB requerida (g/d)",
+        "As-fed total (kg/día)",
+        "Costo total ($/día)",
+        "Costo por cabeza ($/día)",
+    ]:
+        if k in datos:
+            c.drawString(2 * cm, y, f"- {k}: {datos[k]}")
+            y -= 0.45 * cm
+
+    if tabla_detalle is not None and not tabla_detalle.empty:
+        y -= 0.35 * cm
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(2 * cm, y, "Detalle por ingrediente")
+        y -= 0.5 * cm
+        c.setFont("Helvetica", 9)
+        cols = ["ingrediente", "pct_ms", "ms_kg_dia", "asfed_kg_dia", "costo"]
+        header = [
+            "Ingrediente",
+            "%MS",
+            "MS (kg/d)",
+            "Tal cual (kg/d)",
+            "Costo ($)",
+        ]
+        x0 = 2 * cm
+        widths = [6 * cm, 2 * cm, 3 * cm, 4 * cm, 3 * cm]
+        for i, h in enumerate(header):
+            c.drawString(x0 + sum(widths[:i]), y, h)
+        y -= 0.4 * cm
+
+        for _, row in tabla_detalle[cols].iterrows():
+            if y < 2 * cm:
+                c.showPage()
+                y = H - 2 * cm
+                c.setFont("Helvetica-Bold", 11)
+                c.drawString(2 * cm, y, "Detalle por ingrediente (cont.)")
+                y -= 0.5 * cm
+                c.setFont("Helvetica", 9)
+                for i, h in enumerate(header):
+                    c.drawString(x0 + sum(widths[:i]), y, h)
+                y -= 0.4 * cm
+            vals = [
+                str(row["ingrediente"]),
+                f"{float(row['pct_ms']):.2f}",
+                f"{float(row['ms_kg_dia']):.3f}",
+                f"{float(row['asfed_kg_dia']):.3f}",
+                f"{float(row['costo']):.2f}",
+            ]
+            for i, v in enumerate(vals):
+                c.drawString(x0 + sum(widths[:i]), y, v)
+            y -= 0.35 * cm
+
+    c.showPage()
+    c.save()
 
 # Carpeta sandbox del usuario autenticado
 USER_DIR = GLOBAL_DATA_DIR / "users" / username
@@ -1765,6 +1800,7 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 # Tabs
 # ------------------------------------------------------------------------------
 tab_labels = [
+    "🏠 Dashboard",
     "📊 Stock & Corrales",
     "🧾 Ajustes de raciones",
     "📦 Alimentos",
@@ -1783,7 +1819,69 @@ if USER_IS_ADMIN:
 
 tabs = st.tabs(tab_labels + admin_tab_labels)
 
-tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_presentacion, *admin_tabs = tabs
+tab_home, tab_corrales, tab_raciones, tab_alimentos, tab_mixer, tab_parametros, tab_export, tab_presentacion, *admin_tabs = tabs
+
+# ------------------------------------------------------------------------------
+# 🏠 Dashboard
+# ------------------------------------------------------------------------------
+with tab_home:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Resumen operativo")
+
+    snap = metrics_get_snapshot() if "metrics_get_snapshot" in globals() else {
+        "visits_total": 0,
+        "simulations_total": 0,
+        "today_visits": 0,
+        "today_simulations": 0,
+        "last_update": None,
+    }
+
+    base_df = load_base()
+    total_animales = 0
+    va = 0
+    nov = 0
+    if isinstance(base_df, pd.DataFrame) and not base_df.empty:
+        base_df = base_df.copy()
+        base_df["nro_cab"] = pd.to_numeric(base_df.get("nro_cab", 0), errors="coerce").fillna(0).astype(int)
+        total_animales = int(base_df["nro_cab"].sum())
+        base_df["categ"] = base_df.get("categ", "").astype(str).str.lower().str.strip()
+        va = int(base_df.loc[base_df["categ"].str.startswith("va"), "nro_cab"].sum())
+        nov = int(base_df.loc[base_df["categ"].str.startswith("nov"), "nro_cab"].sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Visitas (hoy)", snap.get("today_visits", 0))
+    c2.metric("Simulaciones (hoy)", snap.get("today_simulations", 0))
+    c3.metric("Animales totales", f"{total_animales:,}")
+    c4.metric("Vaquillonas / Nov.", f"{va:,} / {nov:,}")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    mpath = user_path("metrics.json")
+    if mpath.exists():
+        try:
+            data = json.loads(mpath.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        sim_by_day = data.get("simulations_by_day", {}) if isinstance(data, dict) else {}
+        if sim_by_day:
+            df_plot = pd.DataFrame(
+                [{"fecha": k, "sim": v} for k, v in sim_by_day.items()]
+            ).sort_values("fecha")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("Simulaciones por día")
+            fig = plt.figure()
+            plt.plot(df_plot["fecha"], df_plot["sim"], marker="o")
+            plt.xticks(rotation=45, ha="right")
+            plt.ylabel("Simulaciones")
+            plt.xlabel("Fecha")
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("Aún no hay datos de simulaciones para graficar.")
+    else:
+        st.info("Aún no hay datos de simulaciones para graficar.")
 
 tab_methodology = tab_admin = None
 if USER_IS_ADMIN and admin_tabs:
@@ -3500,6 +3598,46 @@ with tab_raciones:
                 for tip in auto_summary.get("tips", []):
                     st.write("• " + tip)
 
+                if isinstance(auto_df, pd.DataFrame) and not auto_df.empty:
+                    pdf_detail = auto_df.copy()
+                    for col in ["ingrediente", "pct_ms", "ms_kg_dia", "asfed_kg_dia", "costo"]:
+                        if col not in pdf_detail.columns:
+                            pdf_detail[col] = 0.0
+                    pdf_name = f"ficha_racion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+                    pdf_path = user_path(pdf_name)
+                    datos_pdf = {
+                        "Ración": pick,
+                        "PV (kg)": f"{auto_summary.get('pv_kg', pv_value):.0f}",
+                        "CV (%)": f"{auto_summary.get('cv_pct', cv_value):.2f}",
+                        "Consumo MS (kg/día)": f"{consumo_ms_val:.3f}",
+                        "EM calculada (Mcal/d)": f"{em_calc_val:.2f}",
+                        "EM requerida (Mcal/d)": f"{em_req_val:.2f}",
+                        "PB calculada (g/d)": f"{pb_calc_val:.0f}",
+                        "PB requerida (g/d)": f"{pb_req_val:.0f}",
+                        "As-fed total (kg/día)": f"{asfed_total_val:.2f}",
+                        "Costo total ($/día)": f"{costo_total_val:.2f}",
+                    }
+                    cabezas_pdf = auto_summary.get("cabezas", 0)
+                    if isinstance(cabezas_pdf, (int, float)) and cabezas_pdf and cabezas_pdf > 0:
+                        datos_pdf["Costo por cabeza ($/día)"] = f"{(costo_total_val / cabezas_pdf):.2f}"
+
+                    generate_summary_pdf(
+                        file_path=pdf_path,
+                        logo_path="assets/logo.png",
+                        titulo="JM P-Feedlot — Ficha de Ración",
+                        datos=datos_pdf,
+                        tabla_detalle=pdf_detail,
+                    )
+
+                    st.download_button(
+                        "⬇️ Descargar PDF de la ración",
+                        data=pdf_path.read_bytes(),
+                        file_name=pdf_path.name,
+                        mime="application/pdf",
+                        type="primary",
+                        key=f"pdf_auto_{rid}",
+                    )
+
                 if MIXER_SIM_LOG.exists():
                     try:
                         logdf = pd.read_csv(MIXER_SIM_LOG, encoding="utf-8-sig")
@@ -3613,6 +3751,15 @@ with tab_raciones:
             if calc_ready:
                 resultado = ration_split_from_pv_cv(grid_rec, alimentos_norm, pv_value, cv_value)
                 detail_df = pd.DataFrame(resultado.get("detalle", []))
+                categoria_req_manual = categoria_val
+                if selected_corral is not None:
+                    categoria_req_manual = str(
+                        selected_corral.get("categ", categoria_req_manual) or categoria_req_manual
+                    )
+                ap_manual = _num_or_none(selected_corral.get("ap_preten")) if selected_corral is not None else None
+                req_em_manual = compute_requirement_em(pv_value, ap_manual, categoria_req_manual) or 0.0
+                req_pb_manual = compute_requirement_pb(pv_value, ap_manual, categoria_req_manual) or 0.0
+                cabezas_manual = _num(selected_corral.get("nro_cab"), 0.0) if selected_corral is not None else 0.0
 
                 st.markdown("#### Métricas diarias de la ración")
                 metrics_cols = st.columns(5)
@@ -3719,6 +3866,56 @@ with tab_raciones:
                         data=export_buffer.getvalue().encode("utf-8"),
                         file_name=f"racion_{rid}_calculo.csv",
                         mime="text/csv",
+                    )
+
+                    pdf_detail = detail_df.rename(
+                        columns={
+                            "MS_kg": "ms_kg_dia",
+                            "asfed_kg": "asfed_kg_dia",
+                            "costo_dia": "costo",
+                        }
+                    ).copy()
+                    for col in ["ingrediente", "pct_ms", "ms_kg_dia", "asfed_kg_dia", "costo"]:
+                        if col not in pdf_detail.columns:
+                            pdf_detail[col] = 0.0
+                    res_manual = {
+                        "em_calc": float(resultado.get("EM_Mcal_dia", 0.0)),
+                        "pb_calc": float(resultado.get("PB_g_dia", 0.0)),
+                        "asfed_total_kg_dia": float(resultado.get("asfed_total_kg_dia", 0.0)),
+                        "cost_total": float(resultado.get("costo_dia", 0.0)),
+                    }
+                    pdf_name = f"ficha_racion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+                    pdf_path = user_path(pdf_name)
+                    datos_pdf = {
+                        "Ración": pick,
+                        "PV (kg)": f"{pv_value:.0f}",
+                        "CV (%)": f"{cv_value:.2f}",
+                        "Consumo MS (kg/día)": f"{resultado['Consumo_MS_dia']:.3f}",
+                        "EM calculada (Mcal/d)": f"{res_manual['em_calc']:.2f}",
+                        "EM requerida (Mcal/d)": f"{req_em_manual:.2f}",
+                        "PB calculada (g/d)": f"{res_manual['pb_calc']:.0f}",
+                        "PB requerida (g/d)": f"{req_pb_manual:.0f}",
+                        "As-fed total (kg/día)": f"{res_manual['asfed_total_kg_dia']:.2f}",
+                        "Costo total ($/día)": f"{res_manual['cost_total']:.2f}",
+                    }
+                    if cabezas_manual > 0:
+                        datos_pdf["Costo por cabeza ($/día)"] = f"{(res_manual['cost_total'] / cabezas_manual):.2f}"
+
+                    generate_summary_pdf(
+                        file_path=pdf_path,
+                        logo_path="assets/logo.png",
+                        titulo="JM P-Feedlot — Ficha de Ración",
+                        datos=datos_pdf,
+                        tabla_detalle=pdf_detail,
+                    )
+
+                    st.download_button(
+                        "⬇️ Descargar PDF de la ración",
+                        data=pdf_path.read_bytes(),
+                        file_name=pdf_path.name,
+                        mime="application/pdf",
+                        type="primary",
+                        key=f"pdf_manual_{rid}",
                     )
 
                 if st.button("💾 Guardar como ración dada (registrar)", type="primary"):
