@@ -26,6 +26,9 @@ import requests
 import qrcode
 import matplotlib.pyplot as plt
 
+from core.activity import get_log_path, log_event, new_trace
+from core.backup import backup_flow
+
 from calc_engine import (
     Food,
     Ingredient,
@@ -51,6 +54,9 @@ from reportlab.pdfgen import canvas
 DATA_DIR_ENV = os.getenv("DATA_DIR")
 GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
 GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+os.environ.setdefault("DATA_DIR", str(GLOBAL_DATA_DIR))
+os.environ.setdefault("BACKUP_DIR", str(GLOBAL_DATA_DIR / "backups"))
 
 # --- Config de ADMIN y almacenamiento de usuarios editables ---
 DEFAULT_ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administración por defecto
@@ -389,6 +395,17 @@ with st.sidebar:
     dark = st.toggle("🌙 Tema oscuro", value=(st.session_state["theme"] == "dark"))
     st.session_state["theme"] = "dark" if dark else "light"
 
+    st.markdown("### Seguimiento")
+    default_operator = (
+        st.session_state.get("operador")
+        or str(name or username or "operador")
+    )
+    operador_input = st.text_input(
+        "Operador", value=default_operator, help="Figura en activity_log.csv"
+    )
+    st.session_state["operador"] = operador_input.strip() or default_operator
+    st.caption("Los eventos clave quedan en data/activity_log.csv (pipe).")
+
 authenticator.logout("Salir", "sidebar")
 APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
 
@@ -670,6 +687,11 @@ def generate_summary_pdf(
 USER_DIR = GLOBAL_DATA_DIR / "users" / username
 USER_DIR.mkdir(parents=True, exist_ok=True)
 
+if os.getenv("DATA_DIR") in (None, "", str(GLOBAL_DATA_DIR)):
+    os.environ["DATA_DIR"] = str(USER_DIR)
+if os.getenv("BACKUP_DIR") in (None, "", str(GLOBAL_DATA_DIR / "backups")):
+    os.environ["BACKUP_DIR"] = str(USER_DIR / "backups")
+
 def user_path(fname: str) -> Path:
     p = USER_DIR / fname
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -768,6 +790,32 @@ def metrics_get_snapshot() -> dict:
         "today_simulations": int(metrics.get("simulations_by_day", {}).get(today, 0) or 0),
         "last_update": metrics.get("last_update"),
     }
+
+
+def _current_operator() -> str:
+    value = str(st.session_state.get("operador", "")).strip()
+    if value:
+        return value
+    if "username" in globals() and username:
+        return str(username)
+    return "operador"
+
+
+def activity_log_event(
+    accion: str,
+    detalle: str = "",
+    *,
+    trace_id: str | None = None,
+    trace_prefix: str | None = None,
+) -> str | None:
+    """Helper to log events without breaking the UI if the CSV is unavailable."""
+
+    trace = trace_id or (new_trace(trace_prefix) if trace_prefix else None)
+    try:
+        return log_event(_current_operator(), accion, detalle, trace)
+    except Exception as exc:
+        print(f"[ACTIVITY] No se pudo registrar evento: {exc}", flush=True)
+        return trace
 
 
 metrics_increment_visit(username)
@@ -1438,6 +1486,11 @@ def save_alimentos(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_alimentos", username)
+    activity_log_event(
+        "edicion",
+        f"alimentos filas={len(df)}",
+        trace_prefix="ALIM-",
+    )
 
 
 def append_ration_log(
@@ -1514,6 +1567,11 @@ def append_ration_log(
         },
     )
     mark_changed("append_ration_log", username)
+    activity_log_event(
+        "edicion",
+        f"racion={racion_nombre} tipo={tipo_racion}",
+        trace_prefix="RAC-",
+    )
 
 @st.cache_data
 def load_mixers() -> pd.DataFrame:
@@ -1532,6 +1590,11 @@ def save_mixers(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_mixers", username)
+    activity_log_event(
+        "edicion",
+        f"mixers filas={len(df)}",
+        trace_prefix="MIX-",
+    )
 
 @st.cache_data
 def load_pesos() -> pd.DataFrame:
@@ -1553,6 +1616,11 @@ def save_pesos(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_pesos", username)
+    activity_log_event(
+        "edicion",
+        f"pesos filas={len(out)}",
+        trace_prefix="PESO-",
+    )
 
 @st.cache_data
 def load_reqener() -> pd.DataFrame:
@@ -1585,6 +1653,11 @@ def save_reqener(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_reqener", username)
+    activity_log_event(
+        "edicion",
+        f"req_em filas={len(out)}",
+        trace_prefix="REQE-",
+    )
 
 @st.cache_data
 def load_reqprot() -> pd.DataFrame:
@@ -1625,6 +1698,11 @@ def save_reqprot(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_reqprot", username)
+    activity_log_event(
+        "edicion",
+        f"req_pb filas={len(out)}",
+        trace_prefix="REQP-",
+    )
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -1659,6 +1737,11 @@ def save_catalog(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_catalog", username)
+    activity_log_event(
+        "edicion",
+        f"catalogo filas={len(df)}",
+        trace_prefix="CAT-",
+    )
 
 @st.cache_data
 def load_recipes() -> pd.DataFrame:
@@ -1683,6 +1766,11 @@ def save_recipes(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_recipes", username)
+    activity_log_event(
+        "edicion",
+        f"recetas filas={len(out)}",
+        trace_prefix="REC-",
+    )
 
 def build_raciones_from_recipes() -> list:
     cat = load_catalog()
@@ -1774,6 +1862,11 @@ def save_base(df: pd.DataFrame):
         meta={"github_backup": success},
     )
     mark_changed("save_base", username)
+    activity_log_event(
+        "edicion",
+        f"corrales filas={len(df)}",
+        trace_prefix="BASE-",
+    )
 
 
 def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
@@ -2022,6 +2115,56 @@ with tab_home:
             st.info("Aún no hay datos de simulaciones para graficar.")
     else:
         st.info("Aún no hay datos de simulaciones para graficar.")
+
+    log_path = get_log_path()
+    if log_path.exists():
+        try:
+            activity_df = pd.read_csv(log_path, sep="|", encoding="utf-8")
+        except Exception as exc:
+            st.warning(f"No se pudo leer activity_log.csv: {exc}")
+        else:
+            if not activity_df.empty:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.subheader("Actividad reciente")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Eventos", len(activity_df))
+                c2.metric(
+                    "Simulaciones",
+                    int((activity_df["accion"] == "simulacion").sum()),
+                )
+                c3.metric("Ediciones", int((activity_df["accion"] == "edicion").sum()))
+                c4.metric(
+                    "Exportaciones",
+                    int((activity_df["accion"] == "exportacion").sum()),
+                )
+
+                last_df = activity_df.tail(20).iloc[::-1]
+                st.dataframe(last_df, use_container_width=True, hide_index=True)
+
+                with st.expander("Filtros"):
+                    filt_df = activity_df.copy()
+                    acciones = sorted(
+                        filt_df["accion"].dropna().astype(str).unique().tolist()
+                    )
+                    operadores = sorted(
+                        filt_df["op"].dropna().astype(str).unique().tolist()
+                    )
+                    sel_acc = st.multiselect("Acciones", acciones)
+                    sel_ops = st.multiselect("Operadores", operadores)
+                    if sel_acc:
+                        filt_df = filt_df[filt_df["accion"].isin(sel_acc)]
+                    if sel_ops:
+                        filt_df = filt_df[filt_df["op"].isin(sel_ops)]
+                    st.dataframe(
+                        filt_df.tail(200).iloc[::-1],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("Aún no hay actividad registrada.")
+    else:
+        st.info("Aún no hay actividad registrada.")
 
 # ------------------------------------------------------------------------------
 # 📊 Stock & Corrales (principal)
@@ -2729,13 +2872,19 @@ with tab_mixer:
                     file_name = (
                         f"plan_mixer{slot}_{racion_sel}_{fecha_str}.csv".replace(" ", "_")
                     )
-                    st.download_button(
+                    download_plan = st.download_button(
                         f"⬇️ Exportar plan (Descarga {slot})",
                         data=export_df.to_csv(index=False).encode("utf-8"),
                         file_name=file_name,
                         mime="text/csv",
                         key=f"download_plan_{slot}",
                     )
+                    if download_plan:
+                        activity_log_event(
+                            "exportacion",
+                            f"mixer_descarga={slot} archivo={file_name}",
+                            trace_prefix="EXP-",
+                        )
 
         st.markdown("---")
         if st.button(
@@ -2755,11 +2904,29 @@ with tab_mixer:
             )
             if ok:
                 metrics_increment_simulation(username)
-                st.success(msg)
+                trace_id = activity_log_event(
+                    "simulacion",
+                    f"descargas={len(plans)} filas={sum(len(df) for df in plans.values())}",
+                    trace_prefix="SIM-",
+                )
+                backup_result = backup_flow()
+                success_msg = f"{msg}"
+                if trace_id:
+                    success_msg = f"{msg} · ID: {trace_id}"
+                st.success(success_msg)
                 st.toast(
                     "Backup de simulación registrado en mixer_sim_log.csv",
                     icon="🗂️",
                 )
+                upload_info = backup_result.get("upload")
+                if upload_info == {"status": "skip"}:
+                    st.caption("Backup local generado (sin subir a GitHub).")
+                elif "upload_error" in backup_result:
+                    st.warning(
+                        "Backup local OK, error al subir a GitHub (revisar GH_TOKEN/GITHUB_REPO)."
+                    )
+                else:
+                    st.caption("Backup local + subido a GitHub ✔️")
             else:
                 st.warning(msg)
 
@@ -2778,14 +2945,21 @@ with tab_mixer:
             consolidado = pd.concat(plan_exports, ignore_index=True)
             fecha_str = fecha_plan.strftime("%Y-%m-%d") if hasattr(fecha_plan, "strftime") else str(fecha_plan)
             st.markdown("---")
-            st.download_button(
+            file_consolidado = f"plan_mixers_consolidado_{fecha_str}.csv"
+            download_consolidado = st.download_button(
                 "⬇️ Exportar plan consolidado (CSV)",
                 data=consolidado.to_csv(index=False).encode("utf-8"),
-                file_name=f"plan_mixers_consolidado_{fecha_str}.csv",
+                file_name=file_consolidado,
                 mime="text/csv",
                 type="primary",
                 key="download_plan_consolidado",
             )
+            if download_consolidado:
+                activity_log_event(
+                    "exportacion",
+                    f"mixer_consolidado archivo={file_consolidado}",
+                    trace_prefix="EXP-",
+                )
 
 # ------------------------------------------------------------------------------
 # ⬇️ Exportar
@@ -2822,25 +2996,38 @@ with tab_export:
                     zf.write(f, arcname=f.name)
             buffer.seek(0)
             ts = datetime.now().strftime("%Y%m%d-%H%M")
-            st.download_button(
+            file_zip = f"simulaciones_{username}_{ts}.zip"
+            download_zip = st.download_button(
                 "⬇️ Descargar ZIP (todas las bases)",
                 data=buffer,
-                file_name=f"simulaciones_{username}_{ts}.zip",
+                file_name=file_zip,
                 mime="application/zip",
                 type="primary",
             )
+            if download_zip:
+                activity_log_event(
+                    "exportacion",
+                    f"zip_bases archivos={len(files_to_zip)}",
+                    trace_prefix="EXP-",
+                )
         else:
             st.info("No se encontraron archivos en tu carpeta de usuario para exportar.")
 
         if st.button("⬇️ Exportar métricas (JSON)", key="export_metrics_button"):
             metrics_payload = _load_metrics()
-            st.download_button(
+            download_metrics = st.download_button(
                 "Descargar métricas",
                 data=json.dumps(metrics_payload, ensure_ascii=False, indent=2).encode("utf-8"),
                 file_name="metrics.json",
                 mime="application/json",
                 key="download_metrics_json",
             )
+            if download_metrics:
+                activity_log_event(
+                    "exportacion",
+                    "metrics.json",
+                    trace_prefix="EXP-",
+                )
 
         st.markdown("---")
         st.markdown("### 📤 Importar ZIP (restaurar backup)")
@@ -2891,6 +3078,11 @@ with tab_export:
                         "import_zip",
                         f"ZIP {uploaded_zip.name} restaurado",
                         meta={"files": restored},
+                    )
+                    activity_log_event(
+                        "importacion",
+                        f"zip={uploaded_zip.name} archivos={len(restored)}",
+                        trace_prefix="IMP-",
                     )
                     rerun_with_cache_reset()
                 else:
@@ -3250,13 +3442,19 @@ with tab_presentacion:
 
         md_content = "\n".join(md_lines).rstrip() + "\n"
 
-        st.download_button(
+        download_tecnologias = st.download_button(
             "⬇️ Exportar documentación técnica (Markdown)",
             data=md_content.encode("utf-8"),
             file_name="tecnologias_y_lenguajes.md",
             mime="text/markdown",
             disabled=not categorias,
         )
+        if download_tecnologias:
+            activity_log_event(
+                "exportacion",
+                "tecnologias_y_lenguajes.md",
+                trace_prefix="EXP-",
+            )
 
 # ------------------------------------------------------------------------------
 # 📐 Metodología y Cálculo (solo admin)
@@ -3267,20 +3465,32 @@ if USER_IS_ADMIN and tab_methodology is not None:
         md, meta = build_methodology_doc()
         st.markdown(md)
 
-        st.download_button(
+        download_metodo = st.download_button(
             "⬇️ Exportar metodología (Markdown)",
             data=md.encode("utf-8"),
             file_name="metodologia_y_calculo.md",
             mime="text/markdown",
             type="primary",
         )
+        if download_metodo:
+            activity_log_event(
+                "exportacion",
+                "metodologia_y_calculo.md",
+                trace_prefix="EXP-",
+            )
 
-        st.download_button(
+        download_meta = st.download_button(
             "⬇️ Exportar metadatos (JSON)",
             data=json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"),
             file_name="metodologia_meta.json",
             mime="application/json",
         )
+        if download_meta:
+            activity_log_event(
+                "exportacion",
+                "metodologia_meta.json",
+                trace_prefix="EXP-",
+            )
 
 # ------------------------------------------------------------------------------
 # 👤 Usuarios (Admin)
@@ -3997,12 +4207,19 @@ with tab_raciones:
                         ]
                     )
                     resumen.to_csv(export_buffer, index=False)
-                    st.download_button(
+                    calc_filename = f"racion_{rid}_calculo.csv"
+                    download_calc = st.download_button(
                         "⬇️ Exportar cálculo (CSV)",
                         data=export_buffer.getvalue().encode("utf-8"),
-                        file_name=f"racion_{rid}_calculo.csv",
+                        file_name=calc_filename,
                         mime="text/csv",
                     )
+                    if download_calc:
+                        activity_log_event(
+                            "exportacion",
+                            f"racion_calculo archivo={calc_filename}",
+                            trace_prefix="EXP-",
+                        )
 
                     pdf_detail = detail_df.rename(
                         columns={
@@ -4045,14 +4262,29 @@ with tab_raciones:
                         tabla_detalle=pdf_detail,
                     )
 
-                    st.download_button(
-                        "⬇️ Descargar PDF de la ración",
-                        data=pdf_path.read_bytes(),
-                        file_name=pdf_path.name,
-                        mime="application/pdf",
-                        type="primary",
-                        key=f"pdf_manual_{rid}",
-                    )
+                    try:
+                        generate_summary_pdf(
+                            pdf_path,
+                            "assets/logo.png",
+                            "JM P-Feedlot — Ficha de Ración",
+                            datos_pdf,
+                            detalle_pdf,
+                        )
+                        download_pdf = st.download_button(
+                            "⬇️ Descargar PDF de la ración",
+                            data=pdf_path.read_bytes(),
+                            file_name=pdf_path.name,
+                            mime="application/pdf",
+                            type="primary",
+                        )
+                        if download_pdf:
+                            activity_log_event(
+                                "exportacion",
+                                f"ficha_racion archivo={pdf_path.name}",
+                                trace_prefix="EXP-",
+                            )
+                    except Exception as exc:
+                        st.warning(f"No se pudo generar el PDF: {exc}")
 
                 if st.button("💾 Guardar como ración dada (registrar)", type="primary"):
                     try:
