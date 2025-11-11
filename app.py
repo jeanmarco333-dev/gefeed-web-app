@@ -67,43 +67,189 @@ AUTH_DIR = GLOBAL_DATA_DIR / "auth"
 AUTH_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_STORE = AUTH_DIR / "users.yaml"  # acá persistimos los usuarios editados por UI
 
-BASE_STYLE = """
-<style>
-.section-enter { opacity:0; transform: translateY(4px); animation: fadeSlideIn .25s ease-out forwards; }
-@keyframes fadeSlideIn { to { opacity:1; transform:none; } }
+BASE_STYLE = dedent(
+    """
+    <style>
+    :root {
+        --shadow-soft: 0 16px 48px -24px rgba(15, 23, 42, 0.35);
+        --shadow-card: 0 18px 42px -24px rgba(15, 23, 42, 0.28);
+        --radius-card: 18px;
+        --radius-pill: 999px;
+        --transition-base: all 0.22s ease;
+    }
 
-.card { transition: box-shadow .2s ease, transform .2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12); }
+    html, body, .block-container {
+        font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+        letter-spacing: 0.01em;
+    }
 
-.stButton>button { transition: transform .08s ease, filter .2s ease; }
-.stButton>button:active { transform: scale(.98); }
+    section.main > div {
+        padding-top: 0.6rem;
+    }
 
-details > summary { cursor:pointer; list-style:none; transition: color .2s ease; }
-details > summary::-webkit-details-marker { display:none; }
-details > summary::after { content:"▸"; display:inline-block; margin-left:.5rem; transition: transform .2s ease; }
-details[open] > summary::after { transform: rotate(90deg); }
-details[open] .expander-body { animation: fadeIn .2s ease both; }
-@keyframes fadeIn { from {opacity:0} to {opacity:1} }
+    .section-enter {
+        opacity: 0;
+        transform: translateY(4px);
+        animation: fadeSlideIn .3s ease-out forwards;
+    }
 
-.chip-ok  { background:#DCFCE7; color:#166534; padding:4px 8px; border-radius:999px; font-size:.85rem; }
-.chip-bad { background:#FEE2E2; color:#991B1B; padding:4px 8px; border-radius:999px; font-size:.85rem; }
+    @keyframes fadeSlideIn {
+        to { opacity: 1; transform: none; }
+    }
 
-.erp-link-button {
-    display:block;
-    padding:0.65rem 0.85rem;
-    border-radius:999px;
-    font-weight:600;
-    text-decoration:none;
-    text-align:center;
-    transition: filter .15s ease;
-}
+    .card {
+        padding: 1.35rem;
+        border-radius: var(--radius-card);
+        border: 1px solid transparent;
+        background: var(--card-bg);
+        box-shadow: var(--shadow-card);
+        transition: var(--transition-base);
+    }
 
-.erp-link-button:hover {
-    text-decoration:none;
-    filter:brightness(0.94);
-}
-</style>
-"""
+    .card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 28px 60px -32px rgba(15, 23, 42, 0.35);
+    }
+
+    .card > .stMarkdown:first-child p {
+        margin-bottom: 0.75rem;
+    }
+
+    .stButton>button,
+    .stDownloadButton>button {
+        border-radius: var(--radius-pill);
+        font-weight: 600;
+        padding: 0.55rem 1.35rem;
+        border: none;
+        box-shadow: 0 14px 32px -18px rgba(37, 99, 235, 0.65);
+        transition: transform 0.08s ease, filter 0.22s ease, box-shadow 0.22s ease;
+    }
+
+    .stButton>button:active,
+    .stDownloadButton>button:active {
+        transform: scale(0.98);
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        padding: 0.65rem 1.35rem;
+        border-radius: var(--radius-pill);
+        font-weight: 600;
+        transition: var(--transition-base);
+        margin-right: 0.35rem;
+    }
+
+    .stTabs [data-baseweb="tab-highlight"] {
+        border-radius: var(--radius-pill);
+    }
+
+    .stMarkdown h3,
+    .stMarkdown h4 {
+        margin-top: 0.35rem;
+        margin-bottom: 0.35rem;
+        font-weight: 700;
+    }
+
+    .stMarkdown h3 {
+        font-size: 1.25rem;
+    }
+
+    .stMarkdown h4 {
+        font-size: 1.05rem;
+    }
+
+    details > summary {
+        cursor: pointer;
+        list-style: none;
+        transition: color 0.2s ease;
+    }
+
+    details > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    details > summary::after {
+        content: "▸";
+        display: inline-block;
+        margin-left: 0.5rem;
+        transition: transform 0.2s ease;
+    }
+
+    details[open] > summary::after {
+        transform: rotate(90deg);
+    }
+
+    details[open] .expander-body {
+        animation: fadeIn 0.2s ease both;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    .chip-ok {
+        background: #DCFCE7;
+        color: #166534;
+        padding: 4px 12px;
+        border-radius: var(--radius-pill);
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .chip-bad {
+        background: #FEE2E2;
+        color: #991B1B;
+        padding: 4px 12px;
+        border-radius: var(--radius-pill);
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .erp-link-button {
+        display: block;
+        padding: 0.75rem 1rem;
+        border-radius: var(--radius-pill);
+        font-weight: 600;
+        text-decoration: none;
+        text-align: center;
+        transition: filter 0.18s ease, box-shadow 0.25s ease;
+        box-shadow: 0 20px 52px -24px rgba(56, 189, 248, 0.55);
+    }
+
+    .erp-link-button:hover {
+        text-decoration: none;
+        filter: brightness(0.96);
+    }
+
+    .stDataFrame div[data-testid="stTable"] {
+        border-radius: var(--radius-card);
+        overflow: hidden;
+    }
+
+    .stDataFrame [role="table"] th,
+    .stDataFrame [role="table"] td {
+        font-size: 0.95rem;
+        padding: 0.65rem;
+    }
+
+    .stSelectbox div[data-baseweb="select"],
+    .stMultiselect div[data-baseweb="select"],
+    .stNumberInput input,
+    .stTextInput input,
+    textarea {
+        border-radius: 12px !important;
+        min-height: 48px;
+        font-size: 0.95rem;
+    }
+
+    .metric-small .stMetric {
+        background: rgba(37, 99, 235, 0.08);
+        padding: 0.8rem 1.1rem;
+        border-radius: var(--radius-card);
+    }
+    </style>
+    """
+)
 
 
 def inject_theme_styles(dark_mode: bool) -> None:
@@ -128,50 +274,122 @@ def inject_theme_styles(dark_mode: bool) -> None:
         "accent": "#38BDF8",
     }
     pal = palette_dark if dark_mode else palette_light
-    theme_css = f"""
-    <style>
-    :root {{
-        --app-bg: {pal['app_bg']};
-        --sidebar-bg: {pal['sidebar_bg']};
-        --app-fg: {pal['app_fg']};
-        --card-bg: {pal['card_bg']};
-        --card-border: {pal['card_border']};
-        --button-bg: {pal['button_bg']};
-        --button-fg: {pal['button_fg']};
-        --accent-color: {pal['accent']};
-    }}
-    div[data-testid="stAppViewContainer"] {{
-        background-color: var(--app-bg);
-        color: var(--app-fg);
-    }}
-    div[data-testid="stSidebar"] {{
-        background-color: var(--sidebar-bg);
-        color: var(--app-fg);
-    }}
-    .card {{
-        background-color: var(--card-bg);
-        border: 1px solid var(--card-border);
-        color: var(--app-fg);
-    }}
-    .stMarkdown, .stText, .stDataFrame {{
-        color: var(--app-fg);
-    }}
-    .stButton>button {{
-        background-color: var(--button-bg);
-        color: var(--button-fg);
-    }}
-    .stButton>button:hover {{
-        filter:brightness(0.95);
-    }}
-    .erp-link-button {{
-        background: var(--accent-color);
-        color: var(--button-fg);
-    }}
-    .stDataFrame div[data-testid="stTable"] {{
-        color: var(--app-fg);
-    }}
-    </style>
-    """
+    theme_css = dedent(
+        f"""
+        <style>
+        :root {{
+            --app-bg: {pal['app_bg']};
+            --sidebar-bg: {pal['sidebar_bg']};
+            --app-fg: {pal['app_fg']};
+            --card-bg: {pal['card_bg']};
+            --card-border: {pal['card_border']};
+            --button-bg: {pal['button_bg']};
+            --button-fg: {pal['button_fg']};
+            --accent-color: {pal['accent']};
+            --border-subtle: rgba(148, 163, 184, 0.32);
+        }}
+
+        div[data-testid="stAppViewContainer"] {{
+            background: linear-gradient(145deg, var(--app-bg) 0%, rgba(56, 189, 248, 0.12) 100%);
+            color: var(--app-fg);
+        }}
+
+        section[data-testid="stSidebar"] {{
+            padding-top: 1.5rem;
+        }}
+
+        div[data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, {pal['sidebar_bg']} 0%, rgba(37, 99, 235, 0.08) 100%);
+            color: var(--app-fg);
+            border-right: 1px solid var(--card-border);
+        }}
+
+        div[data-testid="stSidebar"] .stButton>button,
+        div[data-testid="stSidebar"] .stDownloadButton>button {{
+            width: 100%;
+            margin-top: 0.35rem;
+        }}
+
+        .stMarkdown, .stText, .stDataFrame {{
+            color: var(--app-fg);
+        }}
+
+        .card {{
+            border: 1px solid var(--card-border);
+            color: var(--app-fg);
+        }}
+
+        .stDataFrame div[data-testid="stTable"] {{
+            color: var(--app-fg);
+        }}
+
+        .stButton>button,
+        .stDownloadButton>button,
+        .erp-link-button {{
+            background: var(--accent-color);
+            color: var(--button-fg);
+        }}
+
+        .stButton>button:hover,
+        .stDownloadButton>button:hover,
+        .erp-link-button:hover {{
+            filter: brightness(0.93);
+            box-shadow: 0 18px 44px -22px rgba(37, 99, 235, 0.55);
+        }}
+
+        .stSelectbox div[data-baseweb="select"],
+        .stMultiselect div[data-baseweb="select"],
+        .stNumberInput input,
+        .stTextInput input,
+        textarea {{
+            background: rgba(255, 255, 255, 0.85);
+            border: 1px solid var(--border-subtle) !important;
+            color: var(--app-fg);
+        }}
+
+        .stNumberInput input:focus,
+        .stTextInput input:focus,
+        textarea:focus,
+        .stSelectbox div[data-baseweb="select"]:focus-within,
+        .stMultiselect div[data-baseweb="select"]:focus-within {{
+            border-color: var(--accent-color) !important;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+        }}
+
+        .stTabs [data-baseweb="tab"] {{
+            background: rgba(148, 163, 184, 0.18);
+            color: var(--app-fg);
+        }}
+
+        .stTabs [aria-selected="true"] {{
+            background: var(--accent-color) !important;
+            color: var(--button-fg) !important;
+        }}
+
+        .stMetric label {{
+            color: rgba(148, 163, 184, 0.9);
+        }}
+
+        .stMetric .metric-value {{
+            color: var(--app-fg);
+        }}
+
+        .metric-small .stMetric {{
+            background: rgba(37, 99, 235, 0.12);
+            border: 1px solid rgba(37, 99, 235, 0.22);
+        }}
+
+        .stMarkdown a {{
+            color: var(--accent-color);
+            font-weight: 600;
+        }}
+
+        .stMarkdown a:hover {
+            text-decoration: none;
+        }
+        </style>
+        """
+    )
     st.markdown(BASE_STYLE + theme_css, unsafe_allow_html=True)
 
 # --- Columnas base (constantes) ---
