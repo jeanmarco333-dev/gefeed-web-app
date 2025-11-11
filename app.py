@@ -2306,7 +2306,6 @@ with tab_presentacion:
             - 📍 Salta, Argentina
             - 📞 +54 9 387 407 3236
             - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)
-            - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
             """
         )
 
