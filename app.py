@@ -476,6 +476,8 @@ RECIPES_PATH = user_path("raciones_recipes.csv")
 REQENER_PATH = user_path("requerimientos_energeticos.csv")
 REQPROT_PATH = user_path("requerimiento_proteico.csv")
 AUDIT_LOG_PATH = user_path("audit_log.csv")
+RACIONES_LOG_PATH = user_path("raciones_log.csv")
+RACION_VIGENTE_PATH = user_path("racion_vigente.json")
 
 MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
@@ -1020,6 +1022,82 @@ def save_alimentos(df: pd.DataFrame):
     )
     mark_changed("save_alimentos", username)
 
+
+def append_ration_log(
+    *,
+    username: str,
+    racion_nombre: str,
+    tipo_racion: str,
+    pv_kg: float,
+    cv_pct: float,
+    categoria: str,
+    sim: dict,
+    ingredientes_df: pd.DataFrame,
+) -> None:
+    """Registra la ración calculada y la marca como vigente."""
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    detalle = sim.get("detalle", []) if isinstance(sim, dict) else []
+    receta_records = (
+        ingredientes_df[["ingrediente", "pct_ms"]]
+        .copy()
+        .to_dict(orient="records")
+        if not ingredientes_df.empty
+        else []
+    )
+
+    row = {
+        "ts": ts,
+        "usuario": username,
+        "tipo_racion": str(tipo_racion),
+        "racion": str(racion_nombre),
+        "cat": str(categoria),
+        "pv_kg": float(pv_kg),
+        "cv_pct": float(cv_pct),
+        "consumo_ms_dia": float(sim.get("Consumo_MS_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "asfed_total_kg_dia": float(sim.get("asfed_total_kg_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "em_mcal_dia": float(sim.get("EM_Mcal_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "pb_g_dia": float(sim.get("PB_g_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "costo_dia": float(sim.get("costo_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "receta_pct_ms": json.dumps(receta_records, ensure_ascii=False),
+        "detalle_calc": json.dumps(detalle, ensure_ascii=False),
+    }
+
+    try:
+        existing = pd.read_csv(RACIONES_LOG_PATH, encoding="utf-8-sig")
+    except Exception:
+        existing = pd.DataFrame()
+
+    if existing.empty:
+        df = pd.DataFrame([row])
+    else:
+        df = pd.concat([existing, pd.DataFrame([row])], ignore_index=True)
+
+    df.to_csv(RACIONES_LOG_PATH, index=False, encoding="utf-8-sig")
+
+    try:
+        RACION_VIGENTE_PATH.write_text(
+            json.dumps(row, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        st.warning(f"No se pudo actualizar la ración vigente: {exc}")
+
+    backup_user_file(RACIONES_LOG_PATH, "Registrar ración dada")
+    backup_user_file(RACION_VIGENTE_PATH, "Actualizar ración vigente")
+
+    audit_log_append(
+        "racion_log_append",
+        f"Ración {racion_nombre} registrada",
+        meta={
+            "tipo_racion": str(tipo_racion),
+            "cat": str(categoria),
+            "pv_kg": float(pv_kg),
+            "cv_pct": float(cv_pct),
+        },
+    )
+    mark_changed("append_ration_log", username)
+
 @st.cache_data
 def load_mixers() -> pd.DataFrame:
     try: df = pd.read_csv(MIXERS_PATH, encoding="utf-8-sig")
@@ -1557,12 +1635,12 @@ with tab_corrales:
 # 📦 Alimentos
 # ------------------------------------------------------------------------------
 with tab_alimentos:
-    with card("📦 Catálogo de alimentos", "Editar y normalizar tu base de ingredientes"):
-        col_fr, col_save = st.columns([1,1])
+    with card("📦 Catálogo de alimentos", "MS/COEF/Precio editables — EM/PB fijos — máx. 30 filas"):
+        col_fr, _ = st.columns([1, 1])
         if col_fr.button("🔄 Forzar recarga de catálogo"):
             rerun_with_cache_reset()
 
-        alimentos_df = load_alimentos()
+        alimentos_df = load_alimentos().copy()
 
         with dropdown("📥 Importar planilla de alimentos"):
             uploaded = st.file_uploader(
@@ -1570,46 +1648,48 @@ with tab_alimentos:
                 type=["xlsx", "xls", "csv"],
                 key="alimentos_import_file",
             )
-            if uploaded is not None:
-                if validate_upload_size(uploaded, label="Planilla de alimentos"):
-                    try:
+            if uploaded is not None and validate_upload_size(uploaded, label="Planilla de alimentos"):
+                try:
+                    uploaded.seek(0)
+                    if uploaded.name.lower().endswith((".xlsx", ".xls")):
+                        raw_df = pd.read_excel(uploaded)
+                    else:
                         uploaded.seek(0)
-                        if uploaded.name.lower().endswith((".xlsx", ".xls")):
-                            raw_df = pd.read_excel(uploaded)
-                        else:
-                            uploaded.seek(0)
-                            raw_df = pd.read_csv(uploaded, encoding="utf-8-sig")
-                    except Exception as exc:
-                        st.error(f"No se pudo leer el archivo: {exc}")
+                        raw_df = pd.read_csv(uploaded, encoding="utf-8-sig")
+                except Exception as exc:
+                    st.error(f"No se pudo leer el archivo: {exc}")
+                    audit_log_append(
+                        "import_alimentos_error",
+                        f"Lectura fallida de {uploaded.name}",
+                        status="error",
+                        meta={"error": str(exc)},
+                    )
+                else:
+                    try:
+                        df_norm = normalize_alimentos(raw_df)
+                    except ValueError as exc:
+                        st.error(str(exc))
                         audit_log_append(
                             "import_alimentos_error",
-                            f"Lectura fallida de {uploaded.name}",
+                            f"Normalización fallida {uploaded.name}",
                             status="error",
                             meta={"error": str(exc)},
                         )
                     else:
-                        try:
-                            df_norm = normalize_alimentos(raw_df)
-                        except ValueError as exc:
-                            st.error(str(exc))
-                            audit_log_append(
-                                "import_alimentos_error",
-                                f"Normalización fallida {uploaded.name}",
-                                status="error",
-                                meta={"error": str(exc)},
-                            )
-                        else:
-                            st.dataframe(df_norm.head(20), use_container_width=True)
-                            st.caption(f"Filas: {len(df_norm)} — Columnas: {len(df_norm.columns)}")
-                            dropped = int(df_norm.attrs.get("discarded_rows", 0))
-                            if dropped > 0:
-                                st.warning(f"Se descartaron {dropped} filas sin ORIGEN válido.")
+                        st.dataframe(df_norm.head(20), use_container_width=True)
+                        st.caption(f"Filas: {len(df_norm)} — Columnas: {len(df_norm.columns)}")
+                        dropped = int(df_norm.attrs.get("discarded_rows", 0))
+                        if dropped > 0:
+                            st.warning(f"Se descartaron {dropped} filas sin ORIGEN válido.")
 
-                            if st.button(
-                                "💾 Cargar y reemplazar catálogo actual",
-                                type="primary",
-                                key="import_replace_alimentos",
-                            ):
+                        if st.button(
+                            "💾 Cargar y reemplazar catálogo actual",
+                            type="primary",
+                            key="import_replace_alimentos",
+                        ):
+                            if len(df_norm) > 30:
+                                st.error("El catálogo admite máximo 30 alimentos. Ajustá el archivo antes de importar.")
+                            else:
                                 save_alimentos(df_norm)
                                 st.success("Catálogo actualizado y guardado.")
                                 st.toast("Alimentos cargados correctamente.", icon="🧾")
@@ -1620,60 +1700,83 @@ with tab_alimentos:
                                 )
                                 rerun_with_cache_reset()
 
-        with dropdown("Filtros avanzados"):
-            c1, c2, c3 = st.columns(3)
-            with c1: q = st.text_input("🔎 Buscar (ORIGEN contiene)", placeholder="maíz, afrechillo…")
-            with c2: tipo = st.text_input("Filtrar TIPO (contiene)", placeholder="grano, silo…")
-            with c3: ms_min = st.number_input("MS mínima (%)", 0.0, 100.0, 0.0, step=0.5)
-            view = alimentos_df.copy()
-            if q.strip(): view = view[view["ORIGEN"].str.contains(q, case=False, na=False)]
-            if tipo.strip(): view = view[view["TIPO"].str.contains(tipo, case=False, na=False)]
-            if ms_min>0: view = view[pd.to_numeric(view["MS"], errors="coerce").fillna(0)>=ms_min]
-        grid_alim = st.data_editor(
-            view,
+        show_cols = [
+            "ORIGEN",
+            "PRESENTACION",
+            "TIPO",
+            "MS",
+            "TND (%)",
+            "PB",
+            "EE",
+            "COEF ATC",
+            "$/KG",
+            "EM",
+            "ENP2",
+        ]
+        for col in show_cols:
+            if col not in alimentos_df.columns:
+                alimentos_df[col] = None
+        alimentos_df = alimentos_df[show_cols]
+
+        column_cfg = {
+            "ORIGEN": st.column_config.TextColumn("Origen", disabled=True),
+            "PRESENTACION": st.column_config.TextColumn("Presentación", disabled=True),
+            "TIPO": st.column_config.TextColumn("Tipo", disabled=True),
+            "MS": st.column_config.NumberColumn("MS (%)", min_value=0.0, max_value=100.0, step=0.1),
+            "TND (%)": st.column_config.NumberColumn("TND (%)", disabled=True),
+            "PB": st.column_config.NumberColumn("PB (%)", disabled=True),
+            "EE": st.column_config.NumberColumn("EE (%)", disabled=True),
+            "COEF ATC": st.column_config.NumberColumn("Coef. ATC", step=0.01),
+            "$/KG": st.column_config.NumberColumn("$ por kg (as-fed)", format="$ %.2f", step=0.01),
+            "EM": st.column_config.NumberColumn("EM (Mcal/kg MS)", disabled=True),
+            "ENP2": st.column_config.NumberColumn("ENp (Mcal/kg MS)", disabled=True),
+        }
+
+        st.caption(f"Registros actuales: **{len(alimentos_df)} / 30**")
+        grid = st.data_editor(
+            alimentos_df,
+            column_config=column_cfg,
             num_rows="dynamic",
-            use_container_width=True,
             hide_index=True,
-            key="grid_alimentos",
-            column_config={
-                "ORIGEN": st.column_config.TextColumn("Origen", help="Nombre único del alimento (clave)."),
-                "PRESENTACION": st.column_config.TextColumn("Presentación"),
-                "TIPO": st.column_config.TextColumn("Tipo (grano, silo, subproducto)"),
-                "MS": st.column_config.NumberColumn("MS (%)", min_value=0.0, max_value=100.0, step=0.1, help="Materia seca."),
-                "TND (%)": st.column_config.NumberColumn("TND (%)", min_value=0.0, max_value=100.0, step=0.1),
-                "PB": st.column_config.NumberColumn("PB (%)", min_value=0.0, max_value=100.0, step=0.1),
-                "EE": st.column_config.NumberColumn("EE (%)", min_value=0.0, max_value=100.0, step=0.1),
-                "COEF ATC": st.column_config.NumberColumn("Coef. ATC", step=0.01),
-                "$/KG": st.column_config.NumberColumn("$ por kg", format="$ %.2f", step=0.01, help="Costo as-fed."),
-                "EM": st.column_config.NumberColumn("EM (Mcal/kg MS)", step=0.01),
-                "ENP2": st.column_config.NumberColumn("ENp (Mcal/kg MS)", step=0.01),
-            },
+            use_container_width=True,
+            key="grid_alimentos_fixed",
         )
 
-        st.write("**Estado del catálogo:**")
-        ms_vals = pd.to_numeric(grid_alim.get("MS", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
-        cero_ms = int((ms_vals <= 0).sum())
-        chip("MS > 0 en todos", cero_ms == 0)
-        chip(f"Alimentos listados: {len(grid_alim)}", len(grid_alim) > 0)
-        if cero_ms > 0:
-            st.warning(f"Hay {cero_ms} alimentos con MS=0. Revisá esos valores antes de usarlos en recetas.")
+        estado_cols = st.columns(2)
+        with estado_cols[0]:
+            st.write("**Estado del catálogo:**")
+            ms_vals = pd.to_numeric(grid.get("MS", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+            cero_ms = int((ms_vals <= 0).sum())
+            chip("MS > 0 en todos", cero_ms == 0)
+            chip(f"Alimentos listados: {len(grid)}", len(grid) > 0)
+            if cero_ms > 0:
+                st.warning("Hay alimentos con MS=0. Revisá antes de guardar.")
 
-        if col_save.button("💾 Guardar cambios del catálogo", type="primary"):
-            edited = grid_alim.copy()
-            edited = _normalize_columns(edited)
+        c1, c2 = st.columns(2)
+        if c1.button("💾 Guardar cambios (MS, COEF, $)", type="primary"):
+            edited = grid.copy()
+            if len(edited) > 30:
+                st.error("El catálogo admite máximo 30 alimentos. Recortá filas antes de guardar.")
+            else:
+                base = load_alimentos().copy()
+                base = base.merge(
+                    edited[["ORIGEN", "MS", "COEF ATC", "$/KG"]],
+                    on="ORIGEN",
+                    how="left",
+                    suffixes=("", "_NEW"),
+                )
+                for col in ["MS", "COEF ATC", "$/KG"]:
+                    new_col = f"{col}_NEW"
+                    if new_col in base.columns:
+                        base[col] = base[new_col].where(base[new_col].notna(), base[col])
+                        base.drop(columns=[new_col], inplace=True)
+                base = base.head(30)
+                save_alimentos(base)
+                st.success("Catálogo actualizado (MS, COEF ATC y $/KG).")
+                st.toast("Alimentos guardados y respaldados.", icon="🧾")
+                rerun_with_cache_reset()
 
-            base = _normalize_columns(alimentos_df.copy())
-            base_idx = base.set_index("ORIGEN")
-            edited_idx = edited.set_index("ORIGEN")
-
-            base_idx.update(edited_idx)
-            new_rows = edited_idx.index.difference(base_idx.index)
-            base_idx = pd.concat([base_idx, edited_idx.loc[new_rows]], axis=0)
-
-            out = base_idx.reset_index()
-            save_alimentos(out)
-            st.success("Catálogo guardado.")
-            st.toast("Alimentos actualizados.", icon="🧾")
+        if c2.button("🔄 Recargar"):
             rerun_with_cache_reset()
 
 # ------------------------------------------------------------------------------
@@ -2130,9 +2233,14 @@ with tab_parametros:
         st.dataframe(config_summary, hide_index=True, use_container_width=True)
 
         st.markdown("### Catálogo de alimentos")
-        alim_df = load_alimentos()
+        alim_df = load_alimentos().copy()
+        for col in show_cols:
+            if col not in alim_df.columns:
+                alim_df[col] = None
+        alim_df = alim_df[show_cols]
         grid_alim_p = st.data_editor(
             alim_df,
+            column_config=column_cfg,
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
@@ -2140,7 +2248,27 @@ with tab_parametros:
         )
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar alimentos (parámetros)", type="primary"):
-            save_alimentos(grid_alim_p); st.success("Alimentos guardados."); st.toast("Alimentos actualizados.", icon="🧾"); rerun_with_cache_reset()
+            edited = grid_alim_p.copy()
+            if len(edited) > 30:
+                st.error("El catálogo admite máximo 30 alimentos. Recortá filas antes de guardar.")
+            else:
+                base = load_alimentos().copy()
+                base = base.merge(
+                    edited[["ORIGEN", "MS", "COEF ATC", "$/KG"]],
+                    on="ORIGEN",
+                    how="left",
+                    suffixes=("", "_NEW"),
+                )
+                for col in ["MS", "COEF ATC", "$/KG"]:
+                    new_col = f"{col}_NEW"
+                    if new_col in base.columns:
+                        base[col] = base[new_col].where(base[new_col].notna(), base[col])
+                        base.drop(columns=[new_col], inplace=True)
+                base = base.head(30)
+                save_alimentos(base)
+                st.success("Alimentos guardados.")
+                st.toast("Alimentos actualizados.", icon="🧾")
+                rerun_with_cache_reset()
 
         st.markdown("---")
         st.markdown("### Mixers (capacidad)")
@@ -2318,6 +2446,59 @@ with tab_presentacion:
 
         tech_cfg: dict[str, Any] = {}
         tech_cfg_path = Path("config/about_tech.yaml")
+
+        if tech_cfg_path.exists():
+            try:
+                loaded_cfg = yaml.safe_load(
+                    tech_cfg_path.read_text(encoding="utf-8")
+                )
+                if isinstance(loaded_cfg, dict):
+                    tech_cfg = loaded_cfg
+                else:
+                    st.warning("El archivo de tecnologías no tiene el formato esperado.")
+            except Exception as exc:
+                st.error(f"No se pudo leer config/about_tech.yaml: {exc}")
+        else:
+            st.info("Aún no se cargó el archivo config/about_tech.yaml.")
+
+        version_actual = str(tech_cfg.get("version", "s/d"))
+        st.markdown(f"**Versión actual:** `{version_actual}`")
+
+        categorias_raw = tech_cfg.get("categories", {}) if isinstance(tech_cfg, dict) else {}
+        categorias: list[tuple[str, list[str]]] = []
+        if isinstance(categorias_raw, dict):
+            for categoria, items in categorias_raw.items():
+                if isinstance(items, (list, tuple, set)):
+                    valores = [str(item) for item in items if str(item).strip()]
+                elif items not in (None, ""):
+                    valores = [str(items)]
+                else:
+                    valores = []
+                if valores:
+                    categorias.append((str(categoria), valores))
+        elif categorias_raw:
+            st.warning("Las categorías de tecnologías no son válidas.")
+
+        if categorias:
+            for idx, (categoria, valores) in enumerate(categorias):
+                st.markdown(f"### {categoria}")
+                st.markdown("\n".join(f"- {valor}" for valor in valores))
+                if idx < len(categorias) - 1:
+                    st.markdown("---")
+        else:
+            st.info("No hay tecnologías cargadas para mostrar.")
+
+        md_lines = [
+            "# Tecnologías y Lenguajes",
+            "",
+            f"**Versión actual:** `{version_actual}`",
+            "",
+        ]
+        for categoria, valores in categorias:
+            md_lines.append(f"## {categoria}")
+            md_lines.extend(f"- {valor}" for valor in valores)
+            md_lines.append("")
+
 
         if tech_cfg_path.exists():
             try:
@@ -2600,6 +2781,12 @@ with tab_raciones:
         else:
             pick = st.selectbox("Seleccioná la ración", cat["nombre"].tolist())
             rid  = int(cat.loc[cat["nombre"]==pick, "id"].iloc[0])
+            try:
+                racion_row = cat.loc[cat["id"] == rid].iloc[0]
+            except Exception:
+                racion_row = pd.Series(dtype=object)
+            tipo_racion_val = str(racion_row.get("etapa", "")) if not racion_row.empty else ""
+            categoria_val = str(racion_row.get("sexo", "")) if not racion_row.empty else ""
 
             rec = load_recipes()
             rec_r = rec[rec["id_racion"]==rid].copy()
@@ -2880,5 +3067,101 @@ with tab_raciones:
                         file_name=f"racion_{rid}_calculo.csv",
                         mime="text/csv",
                     )
+
+                if st.button("💾 Guardar como ración dada (registrar)", type="primary"):
+                    try:
+                        ingredientes_min = grid_rec.copy()
+                        if "ingrediente" not in ingredientes_min.columns:
+                            ingredientes_min["ingrediente"] = ""
+                        if "pct_ms" not in ingredientes_min.columns:
+                            ingredientes_min["pct_ms"] = 0.0
+                        ingredientes_min = ingredientes_min[
+                            ingredientes_min["ingrediente"].astype(str).str.strip() != ""
+                        ][["ingrediente", "pct_ms"]]
+                        append_ration_log(
+                            username=username,
+                            racion_nombre=pick,
+                            tipo_racion=tipo_racion_val,
+                            pv_kg=float(pv_value),
+                            cv_pct=float(cv_value),
+                            categoria=categoria_val,
+                            sim=resultado,
+                            ingredientes_df=ingredientes_min,
+                        )
+                        st.success("Ración guardada como 'ración dada' (vigente).")
+                        st.toast("Registro creado en raciones_log.csv", icon="📚")
+                    except Exception as exc:
+                        st.error(f"No se pudo guardar el registro: {exc}")
             else:
                 st.info("Completá la ración (100% MS) para ver el reparto diario de MS, EM y PB.")
+
+        with st.expander("📚 Historial de raciones dadas"):
+            if RACIONES_LOG_PATH.exists():
+                try:
+                    log_df = pd.read_csv(RACIONES_LOG_PATH, encoding="utf-8-sig")
+                except Exception as exc:
+                    st.error(f"No se pudo leer el historial: {exc}")
+                else:
+                    if not log_df.empty:
+                        cols_show = [
+                            "ts",
+                            "tipo_racion",
+                            "racion",
+                            "cat",
+                            "pv_kg",
+                            "cv_pct",
+                            "em_mcal_dia",
+                            "pb_g_dia",
+                            "asfed_total_kg_dia",
+                            "costo_dia",
+                        ]
+                        existing_cols = [c for c in cols_show if c in log_df.columns]
+                        display_log = log_df[existing_cols].copy()
+                        if "ts" in display_log.columns:
+                            with pd.option_context("mode.chained_assignment", None):
+                                display_log["ts"] = pd.to_datetime(
+                                    display_log["ts"], errors="coerce"
+                                )
+                            display_log = display_log.sort_values("ts", ascending=False)
+                            display_log["ts"] = display_log["ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                        st.dataframe(
+                            display_log,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        if "racion" in log_df.columns:
+                            ration_names = (
+                                log_df["racion"].dropna().astype(str).str.strip().sort_values().unique().tolist()
+                            )
+                            if ration_names:
+                                pick_r = st.selectbox("Ración para comparar", ration_names)
+                                sub = log_df[log_df["racion"].astype(str).str.strip() == pick_r].copy()
+                                if not sub.empty:
+                                    sub["ts"] = pd.to_datetime(sub["ts"], errors="coerce")
+                                    sub = sub.sort_values("ts", ascending=False).head(2)
+                                    if len(sub) >= 2:
+                                        a, b = sub.iloc[0], sub.iloc[1]
+                                        def _num_metric(series_name: str) -> tuple[float, float]:
+                                            val_a = pd.to_numeric(a.get(series_name), errors="coerce")
+                                            val_b = pd.to_numeric(b.get(series_name), errors="coerce")
+                                            aval = float(val_a) if not pd.isna(val_a) else 0.0
+                                            bval = float(val_b) if not pd.isna(val_b) else 0.0
+                                            return aval, bval
+
+                                        em_a, em_b = _num_metric("em_mcal_dia")
+                                        pb_a, pb_b = _num_metric("pb_g_dia")
+                                        asfed_a, asfed_b = _num_metric("asfed_total_kg_dia")
+                                        costo_a, costo_b = _num_metric("costo_dia")
+                                        st.metric("EM (Mcal/día): Δ", f"{em_a - em_b:.2f}")
+                                        st.metric("PB (g/día): Δ", f"{pb_a - pb_b:.0f}")
+                                        st.metric("As-fed (kg/día): Δ", f"{asfed_a - asfed_b:.2f}")
+                                        st.metric("Costo/día: Δ", f"${costo_a - costo_b:.2f}")
+                                    else:
+                                        st.info("Se necesitan al menos dos registros para comparar.")
+                                else:
+                                    st.info("No hay registros para esa ración.")
+                    else:
+                        st.info("Aún no hay registros de raciones dadas.")
+            else:
+                st.info("Aún no hay registros de raciones dadas.")
