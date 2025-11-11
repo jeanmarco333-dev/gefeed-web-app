@@ -476,6 +476,77 @@ user_email = str(user_profile.get("email", "") or "").strip()
 if user_email:
     st.session_state["email"] = user_email
 
+# Carpeta sandbox del usuario autenticado
+USER_DIR = GLOBAL_DATA_DIR / "users" / username
+USER_DIR.mkdir(parents=True, exist_ok=True)
+
+if os.getenv("DATA_DIR") in (None, "", str(GLOBAL_DATA_DIR)):
+    os.environ["DATA_DIR"] = str(USER_DIR)
+if os.getenv("BACKUP_DIR") in (None, "", str(GLOBAL_DATA_DIR / "backups")):
+    os.environ["BACKUP_DIR"] = str(USER_DIR / "backups")
+
+
+def user_path(fname: str) -> Path:
+    p = USER_DIR / fname
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+META_DIR = USER_DIR / "meta"
+META_DIR.mkdir(parents=True, exist_ok=True)
+LAST_CHANGED = META_DIR / "last_changed.json"
+PREFS_PATH = META_DIR / "preferences.json"
+
+
+def _load_user_prefs() -> dict:
+    if PREFS_PATH.exists():
+        try:
+            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _save_user_prefs(prefs: dict) -> None:
+    try:
+        PREFS_PATH.write_text(
+            json.dumps(prefs, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[PREFS] No se pudo guardar preferencias: {exc}", flush=True)
+
+
+def _prefs_get(section: str, key: str, default=None):
+    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
+    section_val = prefs.get(section)
+    if isinstance(section_val, dict):
+        return section_val.get(key, default)
+    return default
+
+
+def _prefs_set(section: str, key: str, value) -> None:
+    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
+    section_dict = prefs.get(section)
+    if not isinstance(section_dict, dict):
+        section_dict = {}
+        prefs[section] = section_dict
+    section_dict[key] = value
+    st.session_state["user_prefs"] = prefs
+    _save_user_prefs(prefs)
+
+
+def _format_whatsapp_link(number: str, message: str) -> str:
+    digits = "".join(ch for ch in str(number) if str(ch).isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if not digits:
+        digits = "5493874073236"
+    return f"https://wa.me/{digits}?text={quote_plus(message)}"
+
+
 with st.sidebar:
     st.title("⚙️ Opciones")
     st.write(f"👤 {name} (@{username})")
@@ -679,74 +750,6 @@ def generate_summary_pdf(
 
     c.showPage()
     c.save()
-
-# Carpeta sandbox del usuario autenticado
-USER_DIR = GLOBAL_DATA_DIR / "users" / username
-USER_DIR.mkdir(parents=True, exist_ok=True)
-
-if os.getenv("DATA_DIR") in (None, "", str(GLOBAL_DATA_DIR)):
-    os.environ["DATA_DIR"] = str(USER_DIR)
-if os.getenv("BACKUP_DIR") in (None, "", str(GLOBAL_DATA_DIR / "backups")):
-    os.environ["BACKUP_DIR"] = str(USER_DIR / "backups")
-
-def user_path(fname: str) -> Path:
-    p = USER_DIR / fname
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-META_DIR = USER_DIR / "meta"
-META_DIR.mkdir(parents=True, exist_ok=True)
-LAST_CHANGED = META_DIR / "last_changed.json"
-PREFS_PATH = META_DIR / "preferences.json"
-
-
-def _load_user_prefs() -> dict:
-    if PREFS_PATH.exists():
-        try:
-            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-    return {}
-
-
-def _save_user_prefs(prefs: dict) -> None:
-    try:
-        PREFS_PATH.write_text(
-            json.dumps(prefs, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        print(f"[PREFS] No se pudo guardar preferencias: {exc}", flush=True)
-
-
-def _prefs_get(section: str, key: str, default=None):
-    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
-    section_val = prefs.get(section)
-    if isinstance(section_val, dict):
-        return section_val.get(key, default)
-    return default
-
-
-def _prefs_set(section: str, key: str, value) -> None:
-    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
-    section_dict = prefs.get(section)
-    if not isinstance(section_dict, dict):
-        section_dict = {}
-        prefs[section] = section_dict
-    section_dict[key] = value
-    st.session_state["user_prefs"] = prefs
-    _save_user_prefs(prefs)
-
-
-def _format_whatsapp_link(number: str, message: str) -> str:
-    digits = "".join(ch for ch in str(number) if str(ch).isdigit())
-    if digits.startswith("00"):
-        digits = digits[2:]
-    if not digits:
-        digits = "5493874073236"
-    return f"https://wa.me/{digits}?text={quote_plus(message)}"
 
 ALIM_PATH    = user_path("alimentos.csv")
 BASE_PATH    = user_path("raciones_base.csv")
