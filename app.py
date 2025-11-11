@@ -122,7 +122,7 @@ BASE_STYLE = dedent(
         padding: 0.55rem 1.35rem;
         border: none;
         box-shadow: 0 14px 32px -18px rgba(37, 99, 235, 0.65);
-        transition: transform 0.08s ease, filter 0.22s ease, box-shadow 0.22s ease;
+        transition: transform 0.08s ease, background 0.22s ease, box-shadow 0.22s ease;
     }
 
     .stButton>button:active,
@@ -261,6 +261,7 @@ def inject_theme_styles(dark_mode: bool) -> None:
         "card_border": "rgba(15,23,42,0.08)",
         "button_bg": "#2563EB",
         "button_fg": "#FFFFFF",
+        "button_hover_bg": "#DC2626",
         "accent": "#2563EB",
     }
     palette_dark = {
@@ -271,6 +272,7 @@ def inject_theme_styles(dark_mode: bool) -> None:
         "card_border": "rgba(148,163,184,0.25)",
         "button_bg": "#1D4ED8",
         "button_fg": "#F8FAFC",
+        "button_hover_bg": "#B91C1C",
         "accent": "#38BDF8",
     }
     pal = palette_dark if dark_mode else palette_light
@@ -285,6 +287,7 @@ def inject_theme_styles(dark_mode: bool) -> None:
             --card-border: {pal['card_border']};
             --button-bg: {pal['button_bg']};
             --button-fg: {pal['button_fg']};
+            --button-hover-bg: {pal['button_hover_bg']};
             --accent-color: {pal['accent']};
             --border-subtle: rgba(148, 163, 184, 0.32);
         }}
@@ -326,15 +329,15 @@ def inject_theme_styles(dark_mode: bool) -> None:
         .stButton>button,
         .stDownloadButton>button,
         .erp-link-button {{
-            background: var(--accent-color);
+            background: var(--button-bg);
             color: var(--button-fg);
         }}
 
         .stButton>button:hover,
         .stDownloadButton>button:hover,
         .erp-link-button:hover {{
-            filter: brightness(0.93);
-            box-shadow: 0 18px 44px -22px rgba(37, 99, 235, 0.55);
+            background: var(--button-hover-bg);
+            box-shadow: 0 18px 44px -22px rgba(220, 38, 38, 0.55);
             color: var(--button-fg);
         }}
 
