@@ -2434,6 +2434,7 @@ with tab_presentacion:
             - 📍 Salta, Argentina
             - 📞 +54 9 387 407 3236
             - ✉️ [jeanmarco333@outlook.com](mailto:jeanmarco333@outlook.com)
+            - 🌐 [www.physis.com.ar](https://www.physis.com.ar)
             """
         )
 
@@ -2445,6 +2446,59 @@ with tab_presentacion:
 
         tech_cfg: dict[str, Any] = {}
         tech_cfg_path = Path("config/about_tech.yaml")
+
+        if tech_cfg_path.exists():
+            try:
+                loaded_cfg = yaml.safe_load(
+                    tech_cfg_path.read_text(encoding="utf-8")
+                )
+                if isinstance(loaded_cfg, dict):
+                    tech_cfg = loaded_cfg
+                else:
+                    st.warning("El archivo de tecnologías no tiene el formato esperado.")
+            except Exception as exc:
+                st.error(f"No se pudo leer config/about_tech.yaml: {exc}")
+        else:
+            st.info("Aún no se cargó el archivo config/about_tech.yaml.")
+
+        version_actual = str(tech_cfg.get("version", "s/d"))
+        st.markdown(f"**Versión actual:** `{version_actual}`")
+
+        categorias_raw = tech_cfg.get("categories", {}) if isinstance(tech_cfg, dict) else {}
+        categorias: list[tuple[str, list[str]]] = []
+        if isinstance(categorias_raw, dict):
+            for categoria, items in categorias_raw.items():
+                if isinstance(items, (list, tuple, set)):
+                    valores = [str(item) for item in items if str(item).strip()]
+                elif items not in (None, ""):
+                    valores = [str(items)]
+                else:
+                    valores = []
+                if valores:
+                    categorias.append((str(categoria), valores))
+        elif categorias_raw:
+            st.warning("Las categorías de tecnologías no son válidas.")
+
+        if categorias:
+            for idx, (categoria, valores) in enumerate(categorias):
+                st.markdown(f"### {categoria}")
+                st.markdown("\n".join(f"- {valor}" for valor in valores))
+                if idx < len(categorias) - 1:
+                    st.markdown("---")
+        else:
+            st.info("No hay tecnologías cargadas para mostrar.")
+
+        md_lines = [
+            "# Tecnologías y Lenguajes",
+            "",
+            f"**Versión actual:** `{version_actual}`",
+            "",
+        ]
+        for categoria, valores in categorias:
+            md_lines.append(f"## {categoria}")
+            md_lines.extend(f"- {valor}" for valor in valores)
+            md_lines.append("")
+
 
         if tech_cfg_path.exists():
             try:
