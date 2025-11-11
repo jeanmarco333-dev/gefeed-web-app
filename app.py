@@ -409,6 +409,35 @@ EXPECTED_ALIM_COLS = [
 
 ALIM_COLS = list(EXPECTED_ALIM_COLS)
 
+ALIM_TEMPLATE_ROWS = [
+    {
+        "ORIGEN": "MAIZ GRANO SECO",
+        "PRESENTACION": "Maíz - grano seco",
+        "TIPO": "Ingrediente - Energético",
+        "MS": 88,
+        "TND (%)": 86,
+        "PB": 9,
+        "EE": 4,
+        "COEF ATC": 1.15,
+        "$/KG": 150,
+        "EM": 3.2,
+        "ENP2": 1.6,
+    },
+    {
+        "ORIGEN": "SILO MAIZ",
+        "PRESENTACION": "Silaje de maíz",
+        "TIPO": "Ingrediente - Fibra",
+        "MS": 35,
+        "TND (%)": 62,
+        "PB": 7,
+        "EE": 2,
+        "COEF ATC": 2.5,
+        "$/KG": 55,
+        "EM": 1.8,
+        "ENP2": 0.65,
+    },
+]
+
 REQENER_COLS = ["peso", "cat", "requerimiento_energetico", "ap"]
 REQPROT_COLS = ["peso", "cat", "ap", "req_proteico"]
 
@@ -2722,6 +2751,39 @@ with tab_alimentos:
         alimentos_df = load_alimentos().copy()
 
         with dropdown("📥 Importar planilla de alimentos"):
+            st.markdown("Descargá la plantilla base, completala y luego importala en formato CSV o Excel.")
+
+            template_df = pd.DataFrame(ALIM_TEMPLATE_ROWS, columns=EXPECTED_ALIM_COLS)
+            csv_bytes = template_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "⬇️ Descargar plantilla (CSV)",
+                data=csv_bytes,
+                file_name="plantilla_alimentos.csv",
+                mime="text/csv",
+                key="alimentos_template_csv",
+            )
+
+            excel_bytes = None
+            try:
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:  # type: ignore[arg-type]
+                    template_df.to_excel(writer, index=False, sheet_name="Alimentos")
+                buffer.seek(0)
+                excel_bytes = buffer.getvalue()
+            except Exception:
+                excel_bytes = None
+
+            if excel_bytes:
+                st.download_button(
+                    "⬇️ Descargar plantilla (Excel)",
+                    data=excel_bytes,
+                    file_name="plantilla_alimentos.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="alimentos_template_excel",
+                )
+            else:
+                st.caption("Si preferís Excel, descargá la planilla CSV y abrila con tu editor favorito.")
+
             uploaded = st.file_uploader(
                 "Subí tu planilla (.xlsx, .xls, .csv)",
                 type=["xlsx", "xls", "csv"],
