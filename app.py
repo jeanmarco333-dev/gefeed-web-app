@@ -13,7 +13,7 @@ import os
 import zipfile
 import hashlib
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -249,6 +249,8 @@ if auth_status is False:
 elif auth_status is None:
     st.info("Ingresá tus credenciales"); st.stop()
 
+metrics_increment_visit(username)
+
 user_profile = {}
 credentials_cfg = (CFG.get("credentials") or {}).get("usernames", {})
 if isinstance(credentials_cfg, dict):
@@ -479,6 +481,83 @@ AUDIT_LOG_PATH = user_path("audit_log.csv")
 RACIONES_LOG_PATH = user_path("raciones_log.csv")
 RACION_VIGENTE_PATH = user_path("racion_vigente.json")
 MIXER_SIM_LOG = user_path("mixer_sim_log.csv")
+METRICS_PATH = user_path("metrics.json")
+
+
+def _load_metrics() -> dict:
+    if METRICS_PATH.exists():
+        try:
+            return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "visits_total": 0,
+        "visits_by_day": {},
+        "visits_by_user": {},
+        "simulations_total": 0,
+        "simulations_by_day": {},
+        "simulations_by_user": {},
+        "last_update": None,
+    }
+
+
+def _save_metrics(metrics: dict, *, backup_user: str | None = None) -> None:
+    METRICS_PATH.write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if backup_user:
+        try:
+            github_upsert(
+                METRICS_PATH,
+                message=f"backup({backup_user}): {METRICS_PATH.name}",
+            )
+        except Exception:
+            pass
+
+
+def metrics_increment_visit(user: str) -> None:
+    if st.session_state.get("visit_counted", False):
+        return
+    st.session_state["visit_counted"] = True
+
+    metrics = _load_metrics()
+    today = str(date.today())
+    metrics["visits_total"] = int(metrics.get("visits_total", 0)) + 1
+    metrics.setdefault("visits_by_day", {})[today] = int(
+        metrics.get("visits_by_day", {}).get(today, 0)
+    ) + 1
+    metrics.setdefault("visits_by_user", {})[user] = int(
+        metrics.get("visits_by_user", {}).get(user, 0)
+    ) + 1
+    metrics["last_update"] = datetime.now().isoformat(timespec="seconds")
+    _save_metrics(metrics, backup_user=user)
+
+
+def metrics_increment_simulation(user: str) -> None:
+    metrics = _load_metrics()
+    today = str(date.today())
+    metrics["simulations_total"] = int(metrics.get("simulations_total", 0)) + 1
+    metrics.setdefault("simulations_by_day", {})[today] = int(
+        metrics.get("simulations_by_day", {}).get(today, 0)
+    ) + 1
+    metrics.setdefault("simulations_by_user", {})[user] = int(
+        metrics.get("simulations_by_user", {}).get(user, 0)
+    ) + 1
+    metrics["last_update"] = datetime.now().isoformat(timespec="seconds")
+    _save_metrics(metrics, backup_user=user)
+
+
+def metrics_get_snapshot() -> dict:
+    metrics = _load_metrics()
+    today = str(date.today())
+    return {
+        "visits_total": int(metrics.get("visits_total", 0) or 0),
+        "simulations_total": int(metrics.get("simulations_total", 0) or 0),
+        "today_visits": int(metrics.get("visits_by_day", {}).get(today, 0) or 0),
+        "today_simulations": int(metrics.get("simulations_by_day", {}).get(today, 0) or 0),
+        "last_update": metrics.get("last_update"),
+    }
 
 MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
@@ -1650,6 +1729,36 @@ with tab_corrales:
                 "meta_salida": [350] * 20,
             })
 
+        base_animals = base.copy()
+        if not base_animals.empty:
+            base_animals["nro_cab"] = pd.to_numeric(
+                base_animals.get("nro_cab", 0), errors="coerce"
+            ).fillna(0).astype(int)
+            base_animals["categ"] = (
+                base_animals.get("categ", "")
+                .astype(str)
+                .str.lower()
+                .str.strip()
+            )
+            total_animales = int(base_animals["nro_cab"].sum())
+            va_total = int(
+                base_animals.loc[
+                    base_animals["categ"].str.startswith("va"), "nro_cab"
+                ].sum()
+            )
+            nov_total = int(
+                base_animals.loc[
+                    base_animals["categ"].str.startswith("nov"), "nro_cab"
+                ].sum()
+            )
+        else:
+            total_animales = va_total = nov_total = 0
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Total animales", f"{total_animales:,}")
+        mc2.metric("Vaquillonas", f"{va_total:,}")
+        mc3.metric("Novillos", f"{nov_total:,}")
+
         racion_options = cat_df["nombre"].astype(str).tolist() if "nombre" in cat_df.columns else []
 
         colcfg = {
@@ -2010,7 +2119,13 @@ with tab_mixer:
                         subset.get("nro_cab", 0), errors="coerce"
                     ).fillna(0).astype(int)
                     if "categ" in subset.columns:
-                        subset["categ"] = subset["categ"].fillna("")
+                        subset["categ"] = (
+                            subset["categ"]
+                            .fillna("")
+                            .astype(str)
+                            .str.strip()
+                            .str.lower()
+                        )
                     else:
                         subset["categ"] = ""
 
@@ -2169,6 +2284,32 @@ with tab_mixer:
                     corrales_show = pd.concat([corrales_df, resumen], ignore_index=True)
                     st.dataframe(corrales_show, use_container_width=True, hide_index=True)
 
+                    subset_animals = subset.copy()
+                    subset_animals["nro_cab"] = pd.to_numeric(
+                        subset_animals.get("nro_cab", 0), errors="coerce"
+                    ).fillna(0).astype(int)
+                    subset_animals["categ"] = (
+                        subset_animals.get("categ", "")
+                        .astype(str)
+                        .str.strip()
+                        .str.lower()
+                    )
+                    hd_total = int(subset_animals["nro_cab"].sum())
+                    va_slot = int(
+                        subset_animals.loc[
+                            subset_animals["categ"].str.startswith("va"), "nro_cab"
+                        ].sum()
+                    )
+                    nov_slot = int(
+                        subset_animals.loc[
+                            subset_animals["categ"].str.startswith("nov"), "nro_cab"
+                        ].sum()
+                    )
+                    cc1, cc2, cc3 = st.columns(3)
+                    cc1.metric("Animales en descarga", f"{hd_total:,}")
+                    cc2.metric("Vaquillonas", f"{va_slot:,}")
+                    cc3.metric("Novillos", f"{nov_slot:,}")
+
                     st.caption(
                         f"Turnos programados: {int(turnos_val)} — Total mixer: {total_turno * float(turnos_val):,.1f} kg"
                     )
@@ -2280,6 +2421,7 @@ with tab_mixer:
                 comment="backup manual mixer",
             )
             if ok:
+                metrics_increment_simulation(username)
                 st.success(msg)
                 st.toast(
                     "Backup de simulación registrado en mixer_sim_log.csv",
@@ -2356,6 +2498,16 @@ with tab_export:
             )
         else:
             st.info("No se encontraron archivos en tu carpeta de usuario para exportar.")
+
+        if st.button("⬇️ Exportar métricas (JSON)", key="export_metrics_button"):
+            metrics_payload = _load_metrics()
+            st.download_button(
+                "Descargar métricas",
+                data=json.dumps(metrics_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name="metrics.json",
+                mime="application/json",
+                key="download_metrics_json",
+            )
 
         st.markdown("---")
         st.markdown("### 📤 Importar ZIP (restaurar backup)")
@@ -2615,6 +2767,15 @@ with tab_presentacion:
         )
         if active_email:
             st.write(f"✉️ Email registrado: **{active_email}**")
+
+        snap = metrics_get_snapshot()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Visitas (hoy)", snap.get("today_visits", 0))
+        m2.metric("Visitas (total)", snap.get("visits_total", 0))
+        m3.metric("Simulaciones (hoy)", snap.get("today_simulations", 0))
+        m4.metric("Simulaciones (total)", snap.get("simulations_total", 0))
+        if snap.get("last_update"):
+            st.caption(f"Última actualización: {snap['last_update']}")
 
         mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
         mp_link = f"https://mpago.la/{mp_slug}"
