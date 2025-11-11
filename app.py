@@ -429,16 +429,19 @@ def _logo_block() -> None:
         try:
             b64 = base64.b64encode(logo_path.read_bytes()).decode()
         except Exception:
-            return
-        st.markdown(
-            f"""
+            b64 = None
+        if b64:
+            st.markdown(
+                f"""
         <div style="display:flex;align-items:center;gap:.75rem;margin:.25rem 0 1rem 0;">
           <img src="data:image/png;base64,{b64}" height="36" />
           <div style="font-weight:700; letter-spacing:.4px;">JM P-Feedlot v0.26 — Web</div>
         </div>
         """,
-            unsafe_allow_html=True,
-        )
+                unsafe_allow_html=True,
+            )
+            return
+    st.markdown("### JM P-Feedlot v0.26 — Web")
 
 
 _logo_block()
