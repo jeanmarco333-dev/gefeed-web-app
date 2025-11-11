@@ -2267,57 +2267,6 @@ if USER_IS_ADMIN and admin_tabs:
         # Solo se definió la pestaña de usuarios (compatibilidad defensiva)
         tab_admin = admin_tabs[0]
 
-with tab_home:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("Resumen operativo")
-    snap = metrics_get_snapshot() if "metrics_get_snapshot" in globals() else {
-        "visits_total": 0,
-        "simulations_total": 0,
-        "today_visits": 0,
-        "today_simulations": 0,
-        "last_update": None,
-    }
-    base_df = load_base()
-    total_animales = 0
-    va = 0
-    nov = 0
-    if not base_df.empty:
-        base_df["nro_cab"] = pd.to_numeric(base_df.get("nro_cab", 0), errors="coerce").fillna(0).astype(int)
-        total_animales = int(base_df["nro_cab"].sum())
-        base_df["categ"] = base_df.get("categ", "").astype(str).str.lower().str.strip()
-        va = int(base_df.loc[base_df["categ"].str.startswith("va"), "nro_cab"].sum())
-        nov = int(base_df.loc[base_df["categ"].str.startswith("nov"), "nro_cab"].sum())
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Visitas (hoy)", snap.get("today_visits", 0))
-    c2.metric("Simulaciones (hoy)", snap.get("today_simulations", 0))
-    c3.metric("Animales totales", f"{total_animales:,}")
-    c4.metric("Vaquillonas / Nov.", f"{va:,} / {nov:,}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    mpath = user_path("metrics.json")
-    if mpath.exists():
-        try:
-            data = json.loads(mpath.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-        sim_by_day = data.get("simulations_by_day", {}) if isinstance(data, dict) else {}
-        if sim_by_day:
-            df_plot = (
-                pd.DataFrame([{"fecha": k, "sim": v} for k, v in sim_by_day.items()])
-                .sort_values("fecha")
-            )
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.subheader("Simulaciones por día")
-            fig = plt.figure()
-            plt.plot(df_plot["fecha"], df_plot["sim"], marker="o")
-            plt.xticks(rotation=45, ha="right")
-            plt.ylabel("Simulaciones")
-            plt.xlabel("Fecha")
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.info("Aún no hay datos de simulaciones para graficar.")
     else:
         st.info("Aún no hay datos de simulaciones para graficar.")
 
