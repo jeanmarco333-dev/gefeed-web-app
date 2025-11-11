@@ -335,6 +335,16 @@ def inject_theme_styles(dark_mode: bool) -> None:
         .erp-link-button:hover {{
             filter: brightness(0.93);
             box-shadow: 0 18px 44px -22px rgba(37, 99, 235, 0.55);
+            color: var(--button-fg);
+        }}
+
+        .stButton>button:focus,
+        .stDownloadButton>button:focus,
+        .erp-link-button:focus,
+        .stButton>button:active,
+        .stDownloadButton>button:active,
+        .erp-link-button:active {{
+            color: var(--button-fg);
         }}
 
         .stSelectbox div[data-baseweb="select"],
