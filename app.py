@@ -478,6 +478,7 @@ REQPROT_PATH = user_path("requerimiento_proteico.csv")
 AUDIT_LOG_PATH = user_path("audit_log.csv")
 RACIONES_LOG_PATH = user_path("raciones_log.csv")
 RACION_VIGENTE_PATH = user_path("racion_vigente.json")
+MIXER_SIM_LOG = user_path("mixer_sim_log.csv")
 
 MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
@@ -524,6 +525,127 @@ def _read_last_changed_payload():
             except Exception:
                 return None
     return None
+
+
+def _now_tag() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _file_tag() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def save_mixer_simulation_snapshot(
+    *,
+    username: str,
+    plans_dict: dict,
+    version_app: str = "JM P-Feedlot v0.26",
+    comment: str = "",
+):
+    """Guarda un snapshot de la simulación del mixer (historial + CSV detallado)."""
+
+    if not plans_dict:
+        return False, "No hay descargas/plans para respaldar."
+
+    import pandas as pd
+
+    frames: list[pd.DataFrame] = []
+    for name, df in plans_dict.items():
+        if df is None or df.empty:
+            continue
+        aux = df.copy()
+        aux["descarga"] = name
+        frames.append(aux)
+
+    if not frames:
+        return False, "No se encontraron filas en las descargas."
+
+    consolidado = pd.concat(frames, ignore_index=True)
+
+    fname = f"mixer_sim_{_file_tag()}.csv"
+    fpath = user_path(fname)
+    consolidado.to_csv(fpath, index=False, encoding="utf-8-sig")
+
+    resumen = []
+    for name, df in plans_dict.items():
+        if df is None or df.empty:
+            continue
+        df_local = df.copy()
+        if "turno" in df_local.columns and not df_local["turno"].empty:
+            turno_min = pd.to_numeric(df_local["turno"], errors="coerce").fillna(0).min()
+            df_turno = df_local[df_local["turno"] == turno_min]
+            turnos = int(pd.to_numeric(df_local["turno"], errors="coerce").fillna(0).max())
+        else:
+            df_turno = df_local
+            turnos = 1
+        kg_turno = float(
+            pd.to_numeric(df_turno.get("kg_por_turno", 0.0), errors="coerce").fillna(0.0).sum()
+        )
+        turnos = max(turnos, 1)
+        kg_dia = kg_turno * turnos
+        mix_id = (
+            str(df_local["mixer_id"].iloc[0])
+            if "mixer_id" in df_local.columns and not df_local.empty
+            else ""
+        )
+        tipo = (
+            str(df_local["tipo_racion"].iloc[0])
+            if "tipo_racion" in df_local.columns and not df_local.empty
+            else ""
+        )
+        rac = (
+            str(df_local["racion"].iloc[0])
+            if "racion" in df_local.columns and not df_local.empty
+            else ""
+        )
+        resumen.append(
+            {
+                "descarga": name,
+                "mixer_id": mix_id,
+                "tipo_racion": tipo,
+                "racion": rac,
+                "turnos": turnos,
+                "kg_por_turno": round(kg_turno, 1),
+                "kg_totales_dia": round(kg_dia, 1),
+            }
+        )
+
+    resumen_json = json.dumps(resumen, ensure_ascii=False)
+
+    total_descargas = len(frames)
+
+    row = {
+        "ts": _now_tag(),
+        "usuario": username,
+        "version_app": version_app,
+        "num_descargas": total_descargas,
+        "size_filas": len(consolidado),
+        "archivo_csv": fpath.name,
+        "resumen_kg_dia": resumen_json,
+        "comentario": comment,
+    }
+
+    if MIXER_SIM_LOG.exists():
+        logdf = pd.read_csv(MIXER_SIM_LOG, encoding="utf-8-sig")
+        logdf = pd.concat([logdf, pd.DataFrame([row])], ignore_index=True)
+    else:
+        logdf = pd.DataFrame([row])
+
+    logdf.to_csv(MIXER_SIM_LOG, index=False, encoding="utf-8-sig")
+
+    try:
+        github_upsert(
+            MIXER_SIM_LOG,
+            message=f"backup({username}): {MIXER_SIM_LOG.name}",
+        )
+        github_upsert(
+            fpath,
+            message=f"backup({username}): {fpath.name}",
+        )
+    except Exception:
+        pass
+
+    return True, f"Respaldo creado: {fpath.name}"
 
 
 def build_methodology_doc() -> tuple[str, dict]:
@@ -1826,7 +1948,12 @@ with tab_mixer:
                 st.markdown("#### Planificar descargas individuales (hasta 3 cargas)")
                 st.caption("Cada descarga replica Mixer 1: carga base, turnos y descarga por corral.")
 
+                plans_state = st.session_state.setdefault("mixer_plans", {})
+
                 for slot in range(1, 4):
+                    plan_key = f"descarga_{slot}"
+                    if plan_key not in plans_state:
+                        plans_state[plan_key] = None
                     st.markdown(f"##### Descarga {slot}")
                     col_mix, col_tipo, col_rac, col_turnos = st.columns((1.2, 1.1, 1.1, 0.8))
                     mixer_sel = col_mix.selectbox(
@@ -1858,6 +1985,7 @@ with tab_mixer:
 
                     if not (mixer_sel and tipo_sel and racion_sel):
                         st.caption("Seleccioná mixer, tipo y ración para generar el plan de esta descarga.")
+                        plans_state[plan_key] = None
                         continue
 
                     subset = base_calc[
@@ -1866,11 +1994,13 @@ with tab_mixer:
                     ].copy()
                     if subset.empty:
                         st.info("No hay corrales asignados a esa combinación.")
+                        plans_state[plan_key] = None
                         continue
 
                     receta = recetas_por_nombre.get(str(racion_sel))
                     if not receta:
                         st.warning("No se encontró una receta para esta ración. Definila en 🧾 Ajustes de raciones.")
+                        plans_state[plan_key] = None
                         continue
 
                     subset["kg_turno_asfed_calc"] = pd.to_numeric(
@@ -1922,6 +2052,7 @@ with tab_mixer:
 
                     if carga_df.empty:
                         st.warning("No hay ingredientes con inclusión > 0 en la receta seleccionada.")
+                        plans_state[plan_key] = None
                         continue
 
                     carga_df["kg_totales_dia"] = carga_df["kg_totales_dia"].round(1)
@@ -2048,6 +2179,41 @@ with tab_mixer:
                         else str(fecha_plan)
                     )
 
+                    plan_turnos_rows: list[dict[str, Any]] = []
+                    for turno_idx in range(1, int(turnos_val) + 1):
+                        for _, corral_row in subset.iterrows():
+                            corral_val = pd.to_numeric(
+                                corral_row.get("nro_corral", 0), errors="coerce"
+                            )
+                            if pd.isna(corral_val):
+                                corral_val = 0
+                            cab_val = pd.to_numeric(
+                                corral_row.get("nro_cab", 0), errors="coerce"
+                            )
+                            if pd.isna(cab_val):
+                                cab_val = 0
+                            plan_turnos_rows.append(
+                                {
+                                    "descarga": plan_key,
+                                    "turno": int(turno_idx),
+                                    "mixer_id": mixer_sel,
+                                    "tipo_racion": tipo_sel,
+                                    "racion": racion_sel,
+                                    "nro_corral": int(corral_val),
+                                    "kg_por_turno": float(
+                                        corral_row.get("kg_corral_turno", 0.0)
+                                    ),
+                                    "kg_totales_dia": float(
+                                        corral_row.get("kg_corral_dia", 0.0)
+                                    ),
+                                    "cabezas": int(cab_val),
+                                    "cat": str(corral_row.get("categ", "")),
+                                }
+                            )
+
+                    plan_turnos = pd.DataFrame(plan_turnos_rows)
+                    plans_state[plan_key] = plan_turnos if not plan_turnos.empty else None
+
                     export_rows = []
                     for _, row in editor_df.iterrows():
                         export_rows.append(
@@ -2096,6 +2262,42 @@ with tab_mixer:
                         mime="text/csv",
                         key=f"download_plan_{slot}",
                     )
+
+        st.markdown("---")
+        if st.button(
+            "🔄 Actualizar Mixer (generar backup de simulación)",
+            type="primary",
+        ):
+            plans = {
+                name: df
+                for name, df in st.session_state.get("mixer_plans", {}).items()
+                if isinstance(df, pd.DataFrame) and not df.empty
+            }
+            ok, msg = save_mixer_simulation_snapshot(
+                username=username,
+                plans_dict=plans,
+                version_app=APP_VERSION,
+                comment="backup manual mixer",
+            )
+            if ok:
+                st.success(msg)
+                st.toast(
+                    "Backup de simulación registrado en mixer_sim_log.csv",
+                    icon="🗂️",
+                )
+            else:
+                st.warning(msg)
+
+        with st.expander("📚 Historial de simulaciones del mixer"):
+            if MIXER_SIM_LOG.exists():
+                hist = pd.read_csv(MIXER_SIM_LOG, encoding="utf-8-sig")
+                st.dataframe(
+                    hist.sort_values("ts", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Todavía no hay backups de simulación.")
 
         if plan_exports:
             consolidado = pd.concat(plan_exports, ignore_index=True)
