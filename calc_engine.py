@@ -36,6 +36,54 @@ def sugerencia_balance(em_calc: float, em_req: float, pb_calc: float, pb_req: fl
     return tips
 
 
+def calculate_gmd(
+    *,
+    peso_inicial: float | None = None,
+    peso_final: float | None = None,
+    dias: float | None = None,
+    ap_kg_dia: float | None = None,
+) -> float | None:
+    """Devuelve la ganancia media diaria (GMD) estimada.
+
+    La prioridad es utilizar el valor directo ``ap_kg_dia`` (aumento de peso pretendido).
+    Si no está disponible, intenta calcularlo a partir de pesos inicial/final y los días
+    transcurridos. Devuelve ``None`` cuando no se puede estimar.
+    """
+
+    if ap_kg_dia is not None:
+        try:
+            val = float(ap_kg_dia)
+        except (TypeError, ValueError):
+            val = None
+        else:
+            if not np.isnan(val):
+                return val
+
+    try:
+        peso_ini = float(peso_inicial) if peso_inicial is not None else None
+    except (TypeError, ValueError):
+        peso_ini = None
+    try:
+        peso_fin = float(peso_final) if peso_final is not None else None
+    except (TypeError, ValueError):
+        peso_fin = None
+    try:
+        dias_val = float(dias) if dias is not None else None
+    except (TypeError, ValueError):
+        dias_val = None
+
+    if (
+        peso_ini is not None
+        and peso_fin is not None
+        and dias_val is not None
+        and dias_val > 0
+    ):
+        delta = peso_fin - peso_ini
+        return delta / dias_val
+
+    return None
+
+
 def _safe_num(x, default: float = 0.0) -> float:
     try:
         v = float(pd.to_numeric(x, errors="coerce"))
