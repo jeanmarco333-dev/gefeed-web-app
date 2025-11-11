@@ -17,6 +17,7 @@ from datetime import datetime, date
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from urllib.parse import quote_plus
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,6 +33,7 @@ from core.backup import backup_flow
 from calc_engine import (
     Food,
     Ingredient,
+    calculate_gmd,
     mixer_kg_by_ingredient,
     optimize_ration,
     ration_split_from_pv_cv,
@@ -64,6 +66,113 @@ DEFAULT_ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administra
 AUTH_DIR = GLOBAL_DATA_DIR / "auth"
 AUTH_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_STORE = AUTH_DIR / "users.yaml"  # acá persistimos los usuarios editados por UI
+
+BASE_STYLE = """
+<style>
+.section-enter { opacity:0; transform: translateY(4px); animation: fadeSlideIn .25s ease-out forwards; }
+@keyframes fadeSlideIn { to { opacity:1; transform:none; } }
+
+.card { transition: box-shadow .2s ease, transform .2s ease; }
+.card:hover { transform: translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12); }
+
+.stButton>button { transition: transform .08s ease, filter .2s ease; }
+.stButton>button:active { transform: scale(.98); }
+
+details > summary { cursor:pointer; list-style:none; transition: color .2s ease; }
+details > summary::-webkit-details-marker { display:none; }
+details > summary::after { content:"▸"; display:inline-block; margin-left:.5rem; transition: transform .2s ease; }
+details[open] > summary::after { transform: rotate(90deg); }
+details[open] .expander-body { animation: fadeIn .2s ease both; }
+@keyframes fadeIn { from {opacity:0} to {opacity:1} }
+
+.chip-ok  { background:#DCFCE7; color:#166534; padding:4px 8px; border-radius:999px; font-size:.85rem; }
+.chip-bad { background:#FEE2E2; color:#991B1B; padding:4px 8px; border-radius:999px; font-size:.85rem; }
+
+.erp-link-button {
+    display:block;
+    padding:0.65rem 0.85rem;
+    border-radius:999px;
+    font-weight:600;
+    text-decoration:none;
+    text-align:center;
+    transition: filter .15s ease;
+}
+
+.erp-link-button:hover {
+    text-decoration:none;
+    filter:brightness(0.94);
+}
+</style>
+"""
+
+
+def inject_theme_styles(dark_mode: bool) -> None:
+    palette_light = {
+        "app_bg": "#F8FAFC",
+        "sidebar_bg": "#F1F5F9",
+        "app_fg": "#0F172A",
+        "card_bg": "#FFFFFF",
+        "card_border": "rgba(15,23,42,0.08)",
+        "button_bg": "#2563EB",
+        "button_fg": "#FFFFFF",
+        "accent": "#2563EB",
+    }
+    palette_dark = {
+        "app_bg": "#0F172A",
+        "sidebar_bg": "#111C32",
+        "app_fg": "#E2E8F0",
+        "card_bg": "#172554",
+        "card_border": "rgba(148,163,184,0.25)",
+        "button_bg": "#1D4ED8",
+        "button_fg": "#F8FAFC",
+        "accent": "#38BDF8",
+    }
+    pal = palette_dark if dark_mode else palette_light
+    theme_css = f"""
+    <style>
+    :root {{
+        --app-bg: {pal['app_bg']};
+        --sidebar-bg: {pal['sidebar_bg']};
+        --app-fg: {pal['app_fg']};
+        --card-bg: {pal['card_bg']};
+        --card-border: {pal['card_border']};
+        --button-bg: {pal['button_bg']};
+        --button-fg: {pal['button_fg']};
+        --accent-color: {pal['accent']};
+    }}
+    div[data-testid="stAppViewContainer"] {{
+        background-color: var(--app-bg);
+        color: var(--app-fg);
+    }}
+    div[data-testid="stSidebar"] {{
+        background-color: var(--sidebar-bg);
+        color: var(--app-fg);
+    }}
+    .card {{
+        background-color: var(--card-bg);
+        border: 1px solid var(--card-border);
+        color: var(--app-fg);
+    }}
+    .stMarkdown, .stText, .stDataFrame {{
+        color: var(--app-fg);
+    }}
+    .stButton>button {{
+        background-color: var(--button-bg);
+        color: var(--button-fg);
+    }}
+    .stButton>button:hover {{
+        filter:brightness(0.95);
+    }}
+    .erp-link-button {{
+        background: var(--accent-color);
+        color: var(--button-fg);
+    }}
+    .stDataFrame div[data-testid="stTable"] {{
+        color: var(--app-fg);
+    }}
+    </style>
+    """
+    st.markdown(BASE_STYLE + theme_css, unsafe_allow_html=True)
 
 # --- Columnas base (constantes) ---
 EXPECTED_ALIM_COLS = [
@@ -367,33 +476,21 @@ user_email = str(user_profile.get("email", "") or "").strip()
 if user_email:
     st.session_state["email"] = user_email
 
-# ---------- TEMA GANADERO ----------
-THEME_LIGHT = {
-    "bg": "#f4ede2",
-    "card": "#fff9ef",
-    "text": "#2e473b",
-    "accent": "#8fa97b",
-    "brand1": "#2e473b",
-    "brand2": "#e3c07b",
-}
-THEME_DARK = {
-    "bg": "#0f1513",
-    "card": "#1b2320",
-    "text": "#e9efe6",
-    "accent": "#8fa97b",
-    "brand1": "#8fa97b",
-    "brand2": "#e3c07b",
-}
-
-if "theme" not in st.session_state:
-    st.session_state["theme"] = "light"
-
 with st.sidebar:
     st.title("⚙️ Opciones")
     st.write(f"👤 {name} (@{username})")
     st.markdown("### Apariencia")
-    dark = st.toggle("🌙 Tema oscuro", value=(st.session_state["theme"] == "dark"))
-    st.session_state["theme"] = "dark" if dark else "light"
+    if "ui_theme_toggle" not in st.session_state:
+        st.session_state["ui_theme_toggle"] = bool(
+            _prefs_get("ui", "theme_dark", False)
+        )
+    dark_mode_active = st.toggle(
+        "🌙 Tema oscuro / claro",
+        key="ui_theme_toggle",
+    )
+    stored_theme = bool(_prefs_get("ui", "theme_dark", False))
+    if bool(dark_mode_active) != stored_theme:
+        _prefs_set("ui", "theme_dark", bool(dark_mode_active))
 
     st.markdown("### Seguimiento")
     default_operator = (
@@ -406,111 +503,21 @@ with st.sidebar:
     st.session_state["operador"] = operador_input.strip() or default_operator
     st.caption("Los eventos clave quedan en data/activity_log.csv (pipe).")
 
+    st.markdown("### Soporte")
+    whatsapp_pref = _prefs_get("integrations", "whatsapp_number", "+54 9 387 407 3236")
+    wa_message = "Hola equipo Physis, necesito asistencia técnica para GE-Feedlot."
+    wa_link = _format_whatsapp_link(whatsapp_pref, wa_message)
+    st.markdown(
+        f"<a class='erp-link-button' href='{wa_link}' target='_blank'>💬 Solicitar asistencia técnica</a>",
+        unsafe_allow_html=True,
+    )
+
 authenticator.logout("Salir", "sidebar")
 APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
 
-
-def apply_theme():
-    th = THEME_DARK if st.session_state["theme"] == "dark" else THEME_LIGHT
-    st.markdown(
-        f"""
-    <style>
-      .main {{ background-color: {th['bg']}; color: {th['text']}; }}
-      [data-testid="stHeader"] {{ 
-        background: linear-gradient(90deg, {th['brand1']}, {th['brand2']}); 
-        color: white; 
-      }}
-      .stButton>button {{
-        background-color:{th['brand1']}; color: #fff; border-radius:10px; 
-        transition: filter .2s ease, transform .08s ease;
-      }}
-      .stButton>button:hover {{ filter: brightness(1.06); }}
-      .stButton>button:active {{ transform: scale(.98); }}
-      .card {{
-        background:{th['card']}; border:1px solid rgba(0,0,0,.06); border-radius:14px; 
-        padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:8px 0;
-      }}
-      h1, h2, h3, h4 {{ color: {th['brand1']} !important; }}
-      body, .stApp {{ background-color: {th['bg']}; color: {th['text']}; }}
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-apply_theme()
-
-
-def _logo_block():
-    logo_path = "assets/logo.png"
-    if os.path.exists(logo_path):
-        img = Path(logo_path).read_bytes()
-        b64 = base64.b64encode(img).decode()
-        st.markdown(
-            f"""
-        <div style="display:flex;align-items:center;gap:.75rem;margin:.25rem 0 1rem 0;">
-          <img src="data:image/png;base64,{b64}" height="36" />
-          <div style="font-weight:700; letter-spacing:.4px;">JM P-Feedlot v0.26 — Web</div>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown("### JM P-Feedlot v0.26 — Web")
-
-
-_logo_block()
-st.caption("Stock corrales • Ajustes de raciones • Alimentos • Mixer • Parámetros • Export ZIP")
-THEME_LIGHT = {
-    "bg": "#f4ede2",
-    "card": "#fff9ef",
-    "text": "#2e473b",
-    "accent": "#8fa97b",
-    "brand1": "#2e473b",
-    "brand2": "#e3c07b",
-}
-THEME_DARK = {
-    "bg": "#0f1513",
-    "card": "#1b2320",
-    "text": "#e9efe6",
-    "accent": "#8fa97b",
-    "brand1": "#8fa97b",
-    "brand2": "#e3c07b",
-}
-
-
-def apply_theme() -> None:
-    th = THEME_DARK if st.session_state.get("theme") == "dark" else THEME_LIGHT
-    st.markdown(
-        f"""
-    <style>
-      .main {{ background-color: {th['bg']}; color: {th['text']}; }}
-      [data-testid="stAppViewContainer"] {{ background-color: {th['bg']}; color: {th['text']}; }}
-      [data-testid="stHeader"] {{
-        background: linear-gradient(90deg, {th['brand1']}, {th['brand2']});
-        color: white;
-      }}
-      .stButton>button {{
-        background-color:{th['brand1']}; color: #fff; border-radius:10px;
-        transition: filter .2s ease, transform .08s ease;
-      }}
-      .stButton>button:hover {{ filter: brightness(1.06); }}
-      .stButton>button:active {{ transform: scale(.98); }}
-      .card {{
-        background:{th['card']}; border:1px solid rgba(0,0,0,.06); border-radius:14px;
-        padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:8px 0;
-      }}
-      h1, h2, h3, h4 {{ color: {th['brand1']} !important; }}
-      body {{ color: {th['text']}; background-color: {th['bg']}; }}
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-apply_theme()
-
-
+dark_mode_active = bool(st.session_state.get("ui_theme_toggle", False))
+st.session_state["theme_dark"] = dark_mode_active
+inject_theme_styles(dark_mode_active)
 def _logo_block() -> None:
     logo_path = Path("assets/logo.png")
     if logo_path.exists():
@@ -536,34 +543,6 @@ _logo_block()
 
 st.info("🚧 Versión beta sin costo: validando con clientes iniciales. Guardá y exportá seguido por seguridad.")
 
-# ------------------------------------------------------------------------------
-# CSS (transiciones, tarjetas, dropdowns, micro-interacciones)
-# ------------------------------------------------------------------------------
-st.markdown(
-    """
-<style>
-.section-enter { opacity:0; transform: translateY(4px); animation: fadeSlideIn .25s ease-out forwards; }
-@keyframes fadeSlideIn { to { opacity:1; transform:none; } }
-
-.card { transition: box-shadow .2s ease, transform .2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12); }
-
-.stButton>button { transition: transform .08s ease, filter .2s ease; }
-.stButton>button:active { transform: scale(.98); }
-
-details > summary { cursor:pointer; list-style:none; transition: color .2s ease; }
-details > summary::-webkit-details-marker { display:none; }
-details > summary::after { content:"▸"; display:inline-block; margin-left:.5rem; transition: transform .2s ease; }
-details[open] > summary::after { transform: rotate(90deg); }
-details[open] .expander-body { animation: fadeIn .2s ease both; }
-@keyframes fadeIn { from {opacity:0} to {opacity:1} }
-
-.chip-ok  { background:#DCFCE7; color:#166534; padding:4px 8px; border-radius:999px; font-size:.85rem; }
-.chip-bad { background:#FEE2E2; color:#991B1B; padding:4px 8px; border-radius:999px; font-size:.85rem; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
 # Helpers de UI
 @contextmanager
 def card(title: str, subtitle: str | None = None, icon: str = ""):
@@ -590,6 +569,7 @@ def generate_summary_pdf(
     titulo: str,
     datos: dict,
     tabla_detalle: pd.DataFrame | None = None,
+    recomendaciones: list[str] | None = None,
 ):
     c = canvas.Canvas(str(file_path), pagesize=A4)
     W, H = A4
@@ -637,6 +617,23 @@ def generate_summary_pdf(
         if k in datos:
             c.drawString(2 * cm, y, f"- {k}: {datos[k]}")
             y -= 0.45 * cm
+
+    if recomendaciones:
+        y -= 0.35 * cm
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(2 * cm, y, "Recomendaciones")
+        y -= 0.5 * cm
+        c.setFont("Helvetica", 9)
+        for rec in recomendaciones:
+            if y < 2 * cm:
+                c.showPage()
+                y = H - 2 * cm
+                c.setFont("Helvetica-Bold", 11)
+                c.drawString(2 * cm, y, "Recomendaciones (cont.)")
+                y -= 0.5 * cm
+                c.setFont("Helvetica", 9)
+            c.drawString(2.2 * cm, y, f"• {rec}")
+            y -= 0.35 * cm
 
     if tabla_detalle is not None and not tabla_detalle.empty:
         y -= 0.35 * cm
@@ -700,6 +697,56 @@ def user_path(fname: str) -> Path:
 META_DIR = USER_DIR / "meta"
 META_DIR.mkdir(parents=True, exist_ok=True)
 LAST_CHANGED = META_DIR / "last_changed.json"
+PREFS_PATH = META_DIR / "preferences.json"
+
+
+def _load_user_prefs() -> dict:
+    if PREFS_PATH.exists():
+        try:
+            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _save_user_prefs(prefs: dict) -> None:
+    try:
+        PREFS_PATH.write_text(
+            json.dumps(prefs, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[PREFS] No se pudo guardar preferencias: {exc}", flush=True)
+
+
+def _prefs_get(section: str, key: str, default=None):
+    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
+    section_val = prefs.get(section)
+    if isinstance(section_val, dict):
+        return section_val.get(key, default)
+    return default
+
+
+def _prefs_set(section: str, key: str, value) -> None:
+    prefs = st.session_state.setdefault("user_prefs", _load_user_prefs())
+    section_dict = prefs.get(section)
+    if not isinstance(section_dict, dict):
+        section_dict = {}
+        prefs[section] = section_dict
+    section_dict[key] = value
+    st.session_state["user_prefs"] = prefs
+    _save_user_prefs(prefs)
+
+
+def _format_whatsapp_link(number: str, message: str) -> str:
+    digits = "".join(ch for ch in str(number) if str(ch).isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if not digits:
+        digits = "5493874073236"
+    return f"https://wa.me/{digits}?text={quote_plus(message)}"
 
 ALIM_PATH    = user_path("alimentos.csv")
 BASE_PATH    = user_path("raciones_base.csv")
@@ -712,8 +759,10 @@ REQPROT_PATH = user_path("requerimiento_proteico.csv")
 AUDIT_LOG_PATH = user_path("audit_log.csv")
 RACIONES_LOG_PATH = user_path("raciones_log.csv")
 RACION_VIGENTE_PATH = user_path("racion_vigente.json")
+RACIONES_DADAS_PATH = user_path("raciones_dadas.csv")
 MIXER_SIM_LOG = user_path("mixer_sim_log.csv")
 METRICS_PATH = user_path("metrics.json")
+ACTIVITY_LOG_PATH = get_log_path(ensure=True)
 
 
 def _load_metrics() -> dict:
@@ -1503,6 +1552,8 @@ def append_ration_log(
     categoria: str,
     sim: dict,
     ingredientes_df: pd.DataFrame,
+    tips: list[str] | None = None,
+    gmd_kg_dia: float | None = None,
 ) -> None:
     """Registra la ración calculada y la marca como vigente."""
 
@@ -1515,6 +1566,7 @@ def append_ration_log(
         if not ingredientes_df.empty
         else []
     )
+    balance_tips = tips or []
 
     row = {
         "ts": ts,
@@ -1529,8 +1581,10 @@ def append_ration_log(
         "em_mcal_dia": float(sim.get("EM_Mcal_dia", 0.0) if isinstance(sim, dict) else 0.0),
         "pb_g_dia": float(sim.get("PB_g_dia", 0.0) if isinstance(sim, dict) else 0.0),
         "costo_dia": float(sim.get("costo_dia", 0.0) if isinstance(sim, dict) else 0.0),
+        "gmd_kg_dia": float(gmd_kg_dia) if isinstance(gmd_kg_dia, (int, float)) else np.nan,
         "receta_pct_ms": json.dumps(receta_records, ensure_ascii=False),
         "detalle_calc": json.dumps(detalle, ensure_ascii=False),
+        "balance_tips": json.dumps(balance_tips, ensure_ascii=False),
     }
 
     try:
@@ -1544,6 +1598,7 @@ def append_ration_log(
         df = pd.concat([existing, pd.DataFrame([row])], ignore_index=True)
 
     df.to_csv(RACIONES_LOG_PATH, index=False, encoding="utf-8-sig")
+    df.to_csv(RACIONES_DADAS_PATH, index=False, encoding="utf-8-sig")
 
     try:
         RACION_VIGENTE_PATH.write_text(
@@ -1572,6 +1627,153 @@ def append_ration_log(
         f"racion={racion_nombre} tipo={tipo_racion}",
         trace_prefix="RAC-",
     )
+
+
+def build_erp_payload(limit: int | None = None) -> dict:
+    """Construye el JSON con raciones dadas para integraciones externas."""
+
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    records: list[dict[str, Any]] = []
+    total_asfed = total_cost = total_ms = 0.0
+    gmd_values: list[float] = []
+
+    try:
+        df = pd.read_csv(RACIONES_LOG_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame()
+
+    if not df.empty:
+        with pd.option_context("mode.chained_assignment", None):
+            if "ts" in df.columns:
+                df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+            df = df.sort_values("ts", ascending=False)
+
+        if limit is not None and limit > 0:
+            df = df.head(limit)
+
+        for _, row in df.iterrows():
+            tips_raw = row.get("balance_tips", "[]")
+            try:
+                tips_list = json.loads(tips_raw) if isinstance(tips_raw, str) else list(tips_raw)
+            except Exception:
+                tips_list = []
+
+            consumo_ms_row = _num(row.get("consumo_ms_dia"), 0.0)
+            asfed_row = _num(row.get("asfed_total_kg_dia"), 0.0)
+            costo_row = _num(row.get("costo_dia"), 0.0)
+            gmd_row = _num(row.get("gmd_kg_dia"), np.nan)
+
+            total_ms += consumo_ms_row
+            total_asfed += asfed_row
+            total_cost += costo_row
+            if not np.isnan(gmd_row):
+                gmd_values.append(gmd_row)
+
+            records.append(
+                {
+                    "ts": str(row.get("ts")),
+                    "usuario": row.get("usuario"),
+                    "tipo_racion": row.get("tipo_racion"),
+                    "racion": row.get("racion"),
+                    "cat": row.get("cat"),
+                    "pv_kg": _num(row.get("pv_kg"), 0.0),
+                    "cv_pct": _num(row.get("cv_pct"), 0.0),
+                    "consumo_ms_dia": consumo_ms_row,
+                    "asfed_total_kg_dia": asfed_row,
+                    "costo_dia": costo_row,
+                    "gmd_kg_dia": None if np.isnan(gmd_row) else gmd_row,
+                    "tips": tips_list,
+                }
+            )
+
+    promedio_gmd = None
+    if gmd_values:
+        promedio_gmd = float(np.mean(gmd_values))
+
+    payload = {
+        "generated_at": generated_at,
+        "usuario": username,
+        "raciones_dadas": records,
+        "consumo_ms_total_kg_dia": round(total_ms, 3),
+        "consumo_kg_dia": round(total_asfed, 3),
+        "costo_total_dia": round(total_cost, 2),
+        "gmd_promedio_kg_dia": promedio_gmd,
+        "total_registros": len(records),
+    }
+    return payload
+
+
+def send_payload_to_erp(api_url: str, payload: dict) -> tuple[bool, str]:
+    if not api_url:
+        return False, "Definí una URL de API ERP."
+    try:
+        response = requests.post(api_url, json=payload, timeout=10)
+    except Exception as exc:
+        return False, str(exc)
+    if response.status_code >= 400:
+        return False, f"{response.status_code} – {response.text}"
+    return True, response.text or "OK"
+
+
+def sync_food_costs_from_api(api_url: str) -> tuple[bool, str, int]:
+    if not api_url:
+        return False, "Definí la URL del módulo Compras/Stock.", 0
+    try:
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+    except Exception as exc:
+        return False, str(exc), 0
+
+    try:
+        data = response.json()
+    except Exception as exc:
+        return False, f"Respuesta JSON inválida: {exc}", 0
+
+    if isinstance(data, dict):
+        items = data.get("alimentos") or data.get("items") or []
+    elif isinstance(data, list):
+        items = data
+    else:
+        items = []
+
+    if not items:
+        return False, "La API no devolvió alimentos para actualizar.", 0
+
+    alim_df = load_alimentos().copy()
+    if alim_df.empty:
+        alim_df = pd.DataFrame(columns=ALIM_COLS)
+
+    if "ORIGEN" not in alim_df.columns:
+        alim_df["ORIGEN"] = ""
+    if "$/KG" not in alim_df.columns:
+        alim_df["$/KG"] = 0.0
+
+    alim_df["_origen_lower"] = alim_df["ORIGEN"].astype(str).str.strip().str.lower()
+
+    updates = 0
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        origen = str(entry.get("ORIGEN") or entry.get("origen") or "").strip()
+        if not origen:
+            continue
+        price_raw = entry.get("precio")
+        if price_raw is None:
+            price_raw = entry.get("$/kg") or entry.get("$/KG")
+        price_val = _num_or_none(price_raw)
+        if price_val is None:
+            continue
+        mask = alim_df["_origen_lower"] == origen.lower()
+        if mask.any():
+            alim_df.loc[mask, "$/KG"] = float(price_val)
+            updates += int(mask.sum())
+
+    if updates <= 0:
+        return False, "No se encontraron alimentos coincidentes para actualizar.", 0
+
+    alim_df = alim_df.drop(columns=["_origen_lower"])
+    save_alimentos(alim_df)
+    return True, f"Actualizados {updates} precios desde Compras/Stock.", updates
 
 @st.cache_data
 def load_mixers() -> pd.DataFrame:
@@ -2979,6 +3181,10 @@ with tab_export:
             "requerimientos_energeticos.csv",
             "requerimiento_proteico.csv",
             "audit_log.csv",
+            "raciones_log.csv",
+            "raciones_dadas.csv",
+            "activity_log.csv",
+            "mixer_sim_log.csv",
         ]
         files_to_zip = [USER_DIR / fname for fname in names if (USER_DIR / fname).exists()]
 
@@ -3027,6 +3233,111 @@ with tab_export:
                     "exportacion",
                     "metrics.json",
                     trace_prefix="EXP-",
+                )
+
+        st.markdown("---")
+        st.markdown("### 🧱 Integraciones ERP y Compras/Stock")
+        erp_api_pref = str(_prefs_get("integrations", "erp_api_url", "")).strip()
+        compras_api_pref = str(_prefs_get("integrations", "compras_api_url", "")).strip()
+        dashboard_url_pref = str(_prefs_get("integrations", "dashboard_url", "")).strip()
+        whatsapp_pref = str(_prefs_get("integrations", "whatsapp_number", "+54 9 387 407 3236")).strip()
+
+        erp_api_input = st.text_input(
+            "📡 Endpoint API ERP (POST JSON)",
+            value=erp_api_pref,
+            key="erp_api_url_input",
+            help="URL para enviar el resumen diario de raciones (formato JSON).",
+        ).strip()
+        if erp_api_input != erp_api_pref:
+            _prefs_set("integrations", "erp_api_url", erp_api_input)
+            erp_api_pref = erp_api_input
+
+        compras_api_input = st.text_input(
+            "🧾 Endpoint Compras/Stock (GET costos)",
+            value=compras_api_pref,
+            key="compras_api_url_input",
+            help="Endpoint que devuelve precios de alimentos en JSON.",
+        ).strip()
+        if compras_api_input != compras_api_pref:
+            _prefs_set("integrations", "compras_api_url", compras_api_input)
+            compras_api_pref = compras_api_input
+
+        dashboard_input = st.text_input(
+            "📊 URL Dashboard Physis", value=dashboard_url_pref, key="dashboard_url_input"
+        ).strip()
+        if dashboard_input != dashboard_url_pref:
+            _prefs_set("integrations", "dashboard_url", dashboard_input)
+            dashboard_url_pref = dashboard_input
+
+        whatsapp_input = st.text_input(
+            "💬 WhatsApp soporte", value=whatsapp_pref, key="whatsapp_number_input"
+        ).strip()
+        if whatsapp_input != whatsapp_pref:
+            _prefs_set("integrations", "whatsapp_number", whatsapp_input)
+            whatsapp_pref = whatsapp_input
+
+        payload = build_erp_payload()
+        payload_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+        with st.expander("Ver payload ERP", expanded=False):
+            st.json(payload)
+
+        st.caption(
+            f"Registros exportables: {payload.get('total_registros', 0)} · Consumo diario: {payload.get('consumo_kg_dia', 0):,.2f} kg"
+        )
+
+        export_filename = f"erp_payload_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        st.download_button(
+            "⬇️ Descargar JSON ERP",
+            data=payload_bytes,
+            file_name=export_filename,
+            mime="application/json",
+            key="download_erp_payload",
+        )
+
+        action_col1, action_col2 = st.columns(2)
+        if action_col1.button(
+            "📡 Enviar a ERP (REST)",
+            key="send_payload_erp",
+            disabled=not erp_api_pref,
+        ):
+            ok, msg = send_payload_to_erp(erp_api_pref, payload)
+            if ok:
+                st.success("Payload enviado correctamente al ERP.")
+                activity_log_event(
+                    "integracion",
+                    f"erp_post registros={payload.get('total_registros', 0)}",
+                    trace_prefix="ERP-",
+                )
+            else:
+                st.error(f"No se pudo enviar al ERP: {msg}")
+                activity_log_event(
+                    "integracion_error",
+                    f"erp_post error={msg}",
+                    trace_prefix="ERP-",
+                )
+
+        if action_col2.button(
+            "🔄 Sincronizar costos (Compras/Stock)",
+            key="sync_compras_stock",
+            disabled=not compras_api_pref,
+        ):
+            ok, msg, updated = sync_food_costs_from_api(compras_api_pref)
+            if ok:
+                st.success(msg)
+                activity_log_event(
+                    "integracion",
+                    f"compras_sync actualizados={updated}",
+                    trace_prefix="CMP-",
+                )
+                st.toast("Catálogo de costos actualizado.", icon="🧾")
+                rerun_with_cache_reset()
+            else:
+                st.warning(msg)
+                activity_log_event(
+                    "integracion_error",
+                    f"compras_sync error={msg}",
+                    trace_prefix="CMP-",
                 )
 
         st.markdown("---")
@@ -3301,6 +3612,34 @@ with tab_presentacion:
         m4.metric("Simulaciones (total)", snap.get("simulations_total", 0))
         if snap.get("last_update"):
             st.caption(f"Última actualización: {snap['last_update']}")
+
+        payload_dashboard = build_erp_payload()
+        if payload_dashboard.get("total_registros", 0):
+            st.markdown("### 📊 Indicadores de alimentación")
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric(
+                "Raciones registradas",
+                payload_dashboard.get("total_registros", 0),
+            )
+            col_b.metric(
+                "Consumo diario (kg)",
+                f"{payload_dashboard.get('consumo_kg_dia', 0):,.2f}",
+            )
+            col_c.metric(
+                "Costo diario ($)",
+                f"$ {payload_dashboard.get('costo_total_dia', 0):,.2f}",
+            )
+            gmd_prom = payload_dashboard.get("gmd_promedio_kg_dia")
+            if gmd_prom is not None:
+                st.caption(f"GMD promedio estimada: {gmd_prom:.2f} kg/día")
+        else:
+            st.caption("Aún no hay raciones registradas para el dashboard general.")
+
+        dashboard_url_pref = str(_prefs_get("integrations", "dashboard_url", "")).strip()
+        if dashboard_url_pref:
+            st.markdown(
+                f"🔗 [Abrir dashboard Physis Feedlot]({dashboard_url_pref})"
+            )
 
         mp_slug = "".join(ch for ch in active_email if str(ch).isalnum()) or "physisfeedlot"
         mp_link = f"https://mpago.la/{mp_slug}"
@@ -3885,6 +4224,10 @@ with tab_raciones:
                         costo_por_mcal = (costo_total_val / em_calc_val) if em_calc_val > 0 else None
                         pb_kg = pb_calc_val / 1000.0 if pb_calc_val > 0 else 0.0
                         costo_por_kg_pb = (costo_total_val / pb_kg) if pb_kg > 0 else None
+                        gmd_val = calculate_gmd(
+                            peso_inicial=pv_value,
+                            ap_kg_dia=ap_value,
+                        )
                         st.session_state[auto_summary_key] = {
                             "resumen": res_auto,
                             "em_req": float(em_req_val),
@@ -3900,6 +4243,7 @@ with tab_raciones:
                             "pv_kg": pv_value,
                             "cv_pct": cv_value,
                             "ap_kg_dia": ap_value if ap_value is not None else 0.0,
+                            "gmd_kg_dia": float(gmd_val) if isinstance(gmd_val, (int, float)) else None,
                         }
                         st.success("Ración sugerida generada.")
 
@@ -3914,6 +4258,10 @@ with tab_raciones:
                 em_req_val = float(auto_summary.get("em_req", 0.0))
                 pb_req_val = float(auto_summary.get("pb_req", 0.0))
                 consumo_ms_val = float(auto_summary.get("consumo_ms", consumo_ms))
+                gmd_auto = calculate_gmd(
+                    peso_inicial=auto_summary.get("pv_kg", pv_value),
+                    ap_kg_dia=auto_summary.get("ap_kg_dia"),
+                )
                 if isinstance(auto_df, pd.DataFrame) and not auto_df.empty:
                     st.dataframe(auto_df, use_container_width=True, hide_index=True)
                 st.info(
@@ -3924,7 +4272,7 @@ with tab_raciones:
 - Consumo MS objetivo: **{consumo_ms_val:.2f} kg/día**
 - Costo total: **$ {costo_total_val:.2f}**"""
                 )
-                metric_cols = st.columns(4)
+                metric_cols = st.columns(5)
                 metric_cols[0].metric("Costo total (día)", f"$ {costo_total_val:.2f}")
                 costo_cabeza_val = auto_summary.get("costo_por_cabeza")
                 metric_cols[1].metric(
@@ -3940,6 +4288,10 @@ with tab_raciones:
                 metric_cols[3].metric(
                     "$ por kg PB",
                     f"$ {costo_pb_val:.2f}" if isinstance(costo_pb_val, (float, int)) and costo_pb_val is not None else "s/d",
+                )
+                metric_cols[4].metric(
+                    "GMD estimada (kg/día)",
+                    f"{gmd_auto:.2f}" if isinstance(gmd_auto, (int, float)) and gmd_auto is not None else "s/d",
                 )
                 for tip in auto_summary.get("tips", []):
                     st.write("• " + tip)
@@ -3973,6 +4325,7 @@ with tab_raciones:
                         titulo="JM P-Feedlot — Ficha de Ración",
                         datos=datos_pdf,
                         tabla_detalle=pdf_detail,
+                        recomendaciones=list(auto_summary.get("tips", [])),
                     )
 
                     st.download_button(
@@ -4106,9 +4459,19 @@ with tab_raciones:
                 req_em_manual = compute_requirement_em(pv_value, ap_manual, categoria_req_manual) or 0.0
                 req_pb_manual = compute_requirement_pb(pv_value, ap_manual, categoria_req_manual) or 0.0
                 cabezas_manual = _num(selected_corral.get("nro_cab"), 0.0) if selected_corral is not None else 0.0
+                tips_manual = sugerencia_balance(
+                    float(resultado.get("EM_Mcal_dia", 0.0)),
+                    float(req_em_manual),
+                    float(resultado.get("PB_g_dia", 0.0)),
+                    float(req_pb_manual),
+                )
+                gmd_manual = calculate_gmd(
+                    peso_inicial=pv_value,
+                    ap_kg_dia=ap_manual,
+                )
 
                 st.markdown("#### Métricas diarias de la ración")
-                metrics_cols = st.columns(5)
+                metrics_cols = st.columns(6)
                 metrics_cols[0].metric("CV MS (kg)", f"{resultado['Consumo_MS_dia']:.2f}")
                 metrics_cols[1].metric(
                     "Tal cual total (kg/día)", f"{resultado['asfed_total_kg_dia']:.2f}"
@@ -4116,6 +4479,15 @@ with tab_raciones:
                 metrics_cols[2].metric("EM total (Mcal/día)", f"{resultado['EM_Mcal_dia']:.2f}")
                 metrics_cols[3].metric("PB total (g/día)", f"{resultado['PB_g_dia']:.0f}")
                 metrics_cols[4].metric("Costo/día", f"$ {resultado['costo_dia']:.2f}")
+                metrics_cols[5].metric(
+                    "GMD estimada (kg/día)",
+                    f"{gmd_manual:.2f}" if isinstance(gmd_manual, (int, float)) and gmd_manual is not None else "s/d",
+                )
+
+                if tips_manual:
+                    st.markdown("**Balance nutricional:**")
+                    for tip in tips_manual:
+                        st.write("• " + tip)
 
                 if detail_df.empty:
                     st.info("Definí inclusiones (> 0% MS) para ver el detalle por ingrediente.")
@@ -4260,16 +4632,10 @@ with tab_raciones:
                         titulo="JM P-Feedlot — Ficha de Ración",
                         datos=datos_pdf,
                         tabla_detalle=pdf_detail,
+                        recomendaciones=list(tips_manual),
                     )
 
                     try:
-                        generate_summary_pdf(
-                            pdf_path,
-                            "assets/logo.png",
-                            "JM P-Feedlot — Ficha de Ración",
-                            datos_pdf,
-                            detalle_pdf,
-                        )
                         download_pdf = st.download_button(
                             "⬇️ Descargar PDF de la ración",
                             data=pdf_path.read_bytes(),
@@ -4277,14 +4643,15 @@ with tab_raciones:
                             mime="application/pdf",
                             type="primary",
                         )
+                    except Exception as exc:
+                        st.warning(f"No se pudo generar el PDF: {exc}")
+                    else:
                         if download_pdf:
                             activity_log_event(
                                 "exportacion",
                                 f"ficha_racion archivo={pdf_path.name}",
                                 trace_prefix="EXP-",
                             )
-                    except Exception as exc:
-                        st.warning(f"No se pudo generar el PDF: {exc}")
 
                 if st.button("💾 Guardar como ración dada (registrar)", type="primary"):
                     try:
@@ -4305,6 +4672,8 @@ with tab_raciones:
                             categoria=categoria_val,
                             sim=resultado,
                             ingredientes_df=ingredientes_min,
+                            tips=tips_manual,
+                            gmd_kg_dia=gmd_manual,
                         )
                         st.success("Ración guardada como 'ración dada' (vigente).")
                         st.toast("Registro creado en raciones_log.csv", icon="📚")

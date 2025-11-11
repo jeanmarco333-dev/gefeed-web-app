@@ -18,6 +18,9 @@ FILES = [
     "raciones_base.csv",
     "mixer_sim_log.csv",
     "activity_log.csv",
+    "raciones_dadas.csv",
+    "raciones_log.csv",
+    "racion_vigente.json",
 ]
 
 
