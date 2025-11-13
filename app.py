@@ -22,10 +22,9 @@ from urllib.parse import quote_plus
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import streamlit as st
-import requests
 import qrcode
-import matplotlib.pyplot as plt
+import requests
+import streamlit as st
 
 from core.activity import get_log_path, log_event, new_trace
 from core.backup import backup_flow
@@ -42,10 +41,6 @@ from calc_engine import (
 # --- AUTH (login por usuario/clave) ---
 import yaml
 import streamlit_authenticator as stauth
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
-from reportlab.pdfgen import canvas
-
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
