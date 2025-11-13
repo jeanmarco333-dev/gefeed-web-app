@@ -27,7 +27,7 @@ import qrcode
 import requests
 import streamlit as st
 
-from core.activity import get_log_path, log_event, new_trace
+from core.activity import append_log, get_log_path, new_trace
 from core.backup import backup_flow
 
 from calc_engine import (
@@ -1220,11 +1220,16 @@ def activity_log_event(
     """Helper to log events without breaking the UI if the CSV is unavailable."""
 
     trace = trace_id or (new_trace(trace_prefix) if trace_prefix else None)
-    try:
-        return log_event(_current_operator(), accion, detalle, trace)
-    except Exception as exc:
-        print(f"[ACTIVITY] No se pudo registrar evento: {exc}", flush=True)
-        return trace
+    operator = _current_operator()
+    message_parts = [
+        f"op={operator}",
+        f"accion={accion.strip()}",
+        f"detalle={detalle.strip()}" if detalle else None,
+        f"trace={trace}" if trace else None,
+    ]
+    message = " | ".join(part for part in message_parts if part)
+    append_log(message, scope="activity")
+    return trace
 
 
 metrics_increment_visit(username)

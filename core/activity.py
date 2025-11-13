@@ -1,72 +1,84 @@
-"""Lightweight activity logger for Streamlit workflows."""
-
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-import csv
 import os
+import tempfile
 import uuid
+from typing import Iterable
 
-LOG_FILENAME = "activity_log.csv"
-HEADER = ["op", "fecha", "accion", "detalle", "trace_id"]
-
-
-def _log_path() -> Path:
-    base = Path(os.getenv("DATA_DIR", "data"))
-    return base / LOG_FILENAME
+LOG_FILENAME = "activity.log"
+HEADER = "timestamp,level,scope,message\n"
 
 
-def _ensure_header(path: Path | None = None) -> Path:
-    """Ensure the activity log has a header, ignoring write failures."""
+def _candidate_log_dirs() -> Iterable[Path]:
+    """Yield candidate directories where the activity log can be stored."""
 
-    target = path or _log_path()
-    _safe_ensure_log_file(target)
-    return target
+    env_log = os.getenv("GEFEED_LOG_DIR")
+    if env_log:
+        yield Path(env_log)
+
+    env_data = os.getenv("GEFEED_DATA_DIR")
+    if env_data:
+        yield Path(env_data) / "logs"
+
+    yield Path("data") / "logs"
+
+    yield Path(tempfile.gettempdir()) / "gefeed-logs"
 
 
-def _safe_ensure_log_file(path: Path) -> None:
-    """Create the log file and header without raising on read-only FS."""
+def get_log_path(ensure: bool = True) -> Path:
+    """Return the path to ``activity.log`` in a writable directory."""
+
+    last_err: OSError | None = None
+
+    for base in _candidate_log_dirs():
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            last_err = exc
+            continue
+
+        log_path = base / LOG_FILENAME
+
+        if ensure:
+            try:
+                exists = log_path.exists()
+            except OSError:
+                exists = False
+
+            if not exists:
+                try:
+                    with open(log_path, "w", encoding="utf-8") as handle:
+                        handle.write(HEADER)
+                except OSError as exc:
+                    last_err = exc
+                    continue
+
+        return log_path
+
+    raise RuntimeError(
+        "No se pudo crear / usar activity.log en ningún directorio candidato. "
+        f"Último error: {last_err}"
+    )
+
+
+def append_log(message: str, level: str = "INFO", scope: str = "app") -> None:
+    """Append a line to the activity log without raising if it fails."""
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            with open(path, "w", newline="", encoding="utf-8") as handle:
-                writer = csv.writer(handle, delimiter="|")
-                writer.writerow(HEADER)
+        path = get_log_path(ensure=True)
     except Exception:
-        # Fall back to a no-op when the filesystem is not writable. Logging will
-        # be silently disabled, but the rest of the app can continue running.
-        pass
+        return
 
-
-def get_log_path(ensure: bool = False) -> Path:
-    """Return the CSV path where events are stored."""
-
-    path = _log_path()
-    if ensure:
-        _ensure_header(path)
-    return path
-
-
-def log_event(op: str, accion: str, detalle: str = "", trace_id: str | None = None) -> str:
-    """Append a new activity row and return the trace identifier used."""
-
-    path = _ensure_header()
-    now = datetime.now().isoformat(timespec="seconds")
-    trace = trace_id or uuid.uuid4().hex[:8]
+    safe_message = message.replace(",", ";")
+    line = f"{datetime.utcnow().isoformat()}Z,{level},{scope},{safe_message}\n"
 
     try:
-        with open(path, "a", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle, delimiter="|")
-            writer.writerow([op.strip() or "operador", now, accion, detalle, trace])
-    except Exception:
-        # Fall back to a best-effort log when writes are not possible. The
-        # application should continue running even if the activity log is
-        # unavailable (e.g. read-only filesystem).
-        pass
-
-    return trace
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        return
 
 
 def new_trace(prefix: str = "") -> str:
@@ -74,34 +86,4 @@ def new_trace(prefix: str = "") -> str:
     return f"{prefix}{base}" if prefix else base
 
 
-def read_events(limit: int | None = None) -> list[list[str]]:
-    """Return the most recent events as a list of rows."""
-
-    path = get_log_path()
-
-    try:
-        if not path.exists():
-            return []
-    except Exception:
-        return []
-
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            reader = csv.reader(handle, delimiter="|")
-            rows = list(reader)
-    except Exception:
-        return []
-
-    if not rows:
-        return []
-
-    header, *entries = rows
-    if header != HEADER:
-        entries = rows
-
-    if limit is not None and limit >= 0:
-        entries = entries[-limit:]
-    return entries
-
-
-__all__ = ["log_event", "new_trace", "get_log_path", "read_events"]
+__all__ = ["_candidate_log_dirs", "get_log_path", "append_log", "new_trace"]
