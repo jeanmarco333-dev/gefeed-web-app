@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import tempfile
 import zipfile
 import hashlib
@@ -64,6 +65,16 @@ def _ensure_writable_dir(preferred: Path) -> Path:
     except OSError:
         fallback = Path(tempfile.gettempdir()) / "gefeed-data"
         fallback.mkdir(parents=True, exist_ok=True)
+
+        # If we had to fall back, mirror the read-only seed data so the app can start.
+        if preferred.exists():
+            for child in preferred.iterdir():
+                destination = fallback / child.name
+                if child.is_dir():
+                    shutil.copytree(child, destination, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(child, destination)
+
         return fallback
 
 
