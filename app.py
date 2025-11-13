@@ -2398,6 +2398,12 @@ def load_base() -> pd.DataFrame:
             df[col] = pd.NA
     ordered_cols = [col for col in BASE_EXPECTED_COLUMNS if col in df.columns]
     df = df[ordered_cols]
+
+    if "nro_cab" in df.columns:
+        df["nro_cab"] = normalize_animal_counts(df["nro_cab"], index=df.index)
+        df["nro_cab"] = (
+            pd.to_numeric(df["nro_cab"], errors="coerce").fillna(0).astype(int)
+        )
     return df
 
 
