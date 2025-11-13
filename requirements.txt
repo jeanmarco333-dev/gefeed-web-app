@@ -1,6 +1,5 @@
 streamlit>=1.33,<2
 pandas>=2.0
-streamlit-authenticator==0.3.2
 bcrypt>=4.0.1
 PyYAML>=6.0
 requests>=2.31

@@ -41,8 +41,8 @@ from calc_engine import (
     sugerencia_balance,
 )
 # --- AUTH (login por usuario/clave) ---
+import bcrypt
 import yaml
-import streamlit_authenticator as stauth
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
@@ -89,6 +89,35 @@ DEFAULT_ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administra
 AUTH_DIR = GLOBAL_DATA_DIR / "auth"
 AUTH_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_STORE = AUTH_DIR / "users.yaml"  # acá persistimos los usuarios editados por UI
+
+SESSION_AUTH_STATUS = "auth_status"
+SESSION_AUTH_USER = "auth_username"
+SESSION_AUTH_NAME = "auth_name"
+SESSION_AUTH_TOKEN = "auth_token_seed"
+
+
+def _clear_auth_state() -> None:
+    for key in (SESSION_AUTH_STATUS, SESSION_AUTH_USER, SESSION_AUTH_NAME, SESSION_AUTH_TOKEN):
+        st.session_state.pop(key, None)
+
+
+def _logout_user() -> None:
+    _clear_auth_state()
+    st.experimental_rerun()
+
+
+def _verify_password(plain_password: str, stored_hash: str | None) -> bool:
+    if not plain_password or not stored_hash:
+        return False
+
+    try:
+        if isinstance(stored_hash, bytes):
+            hashed_bytes = stored_hash
+        else:
+            hashed_bytes = str(stored_hash).encode("utf-8")
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_bytes)
+    except (TypeError, ValueError):
+        return False
 
 BASE_STYLE = dedent(
     """
@@ -729,10 +758,14 @@ def is_admin(username: str) -> bool:
 
     return user in DEFAULT_ADMIN_USERS
 
-# --- Crear Authenticate con ARGUMENTOS POSICIONALES (compat 0.3.2) ---
-# Validaciones mínimas:
-creds = CFG.get("credentials") or {}
-if not isinstance(creds, dict) or "usernames" not in creds or not isinstance(creds["usernames"], dict):
+# --- Autenticación manual (sin dependencias externas) -------------------------
+credentials_cfg_root = CFG.get("credentials") or {}
+if not isinstance(credentials_cfg_root, dict):
+    st.error("Config inválida: falta 'credentials' (dict).")
+    st.stop()
+
+credentials_cfg = credentials_cfg_root.get("usernames")
+if not isinstance(credentials_cfg, dict):
     st.error("Config inválida: falta 'credentials.usernames' (dict).")
     st.stop()
 
@@ -744,43 +777,56 @@ try:
 except Exception:
     cookie_expiry_days = 7
 
-# 'preauthorized' en 0.3.2 puede venir como dict {"emails":[...]} o lista
-preauth_cfg = CFG.get("preauthorized") or []
-preauthorized = (
-    preauth_cfg.get("emails", []) if isinstance(preauth_cfg, dict) else preauth_cfg
-) or []
+cookie_token_seed = f"{cookie_name}|{cookie_key}|{cookie_expiry_days}"
+stored_seed = st.session_state.get(SESSION_AUTH_TOKEN)
+if stored_seed and stored_seed != cookie_token_seed:
+    _clear_auth_state()
 
-# IMPORTANTE: firma posicional para 0.3.2 => (credentials, cookie_name, key, cookie_expiry_days, preauthorized)
-authenticator = stauth.Authenticate(
-    creds,
-    cookie_name,
-    cookie_key,
-    cookie_expiry_days,
-    preauthorized,
-)
+auth_status = st.session_state.get(SESSION_AUTH_STATUS)
+username = st.session_state.get(SESSION_AUTH_USER)
+name = st.session_state.get(SESSION_AUTH_NAME)
 
-# Manejo defensivo del retorno (tupla/dict/None)
-result = authenticator.login(location="main")
-if isinstance(result, tuple) and len(result) == 3:
-    name, auth_status, username = result
-elif isinstance(result, dict):
-    name = result.get("name")
-    auth_status = result.get("authentication_status")
-    username = result.get("username")
-elif result is None:
-    st.info("Ingresá tus credenciales"); st.stop()
+if auth_status is True and username:
+    st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
 else:
-    st.error("Retorno inesperado de authenticator.login()"); st.stop()
+    if auth_status is False:
+        st.error("Usuario o contraseña inválidos")
 
-if auth_status is False:
-    st.error("Usuario o contraseña inválidos"); st.stop()
-elif auth_status is None:
-    st.info("Ingresá tus credenciales"); st.stop()
+    with st.form("login_form"):
+        input_username = st.text_input("Usuario", placeholder="ej: admin")
+        input_password = st.text_input("Contraseña", type="password")
+        submit_login = st.form_submit_button("Ingresar", type="primary")
 
-user_profile = {}
-credentials_cfg = (CFG.get("credentials") or {}).get("usernames", {})
-if isinstance(credentials_cfg, dict):
-    user_profile = credentials_cfg.get(username, {}) or {}
+    if submit_login:
+        user_entry = credentials_cfg.get(input_username)
+        stored_hash = (user_entry or {}).get("password")
+        if _verify_password(input_password, stored_hash):
+            resolved_name = (user_entry or {}).get("name") or input_username
+            st.session_state[SESSION_AUTH_STATUS] = True
+            st.session_state[SESSION_AUTH_USER] = input_username
+            st.session_state[SESSION_AUTH_NAME] = resolved_name
+            st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
+            st.experimental_rerun()
+        else:
+            st.session_state[SESSION_AUTH_STATUS] = False
+            st.error("Usuario o contraseña inválidos")
+            st.stop()
+    else:
+        if auth_status is not False:
+            st.info("Ingresá tus credenciales")
+        st.stop()
+
+# Si llegamos aquí, hay una sesión válida
+auth_status = True
+username = st.session_state.get(SESSION_AUTH_USER)
+name = st.session_state.get(SESSION_AUTH_NAME) or username
+
+if not username:
+    st.error("Sesión inválida. Iniciá sesión nuevamente.")
+    _clear_auth_state()
+    st.stop()
+
+user_profile = credentials_cfg.get(username, {}) or {}
 
 USER_IS_ADMIN = is_admin(username)
 
@@ -895,7 +941,8 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-authenticator.logout("Salir", "sidebar")
+    if st.button("Salir", type="secondary", use_container_width=True):
+        _logout_user()
 APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
 
 dark_mode_active = bool(st.session_state.get("ui_theme_toggle", False))
@@ -4458,7 +4505,6 @@ if tab_admin is not None:
         else:
             with card("👤 Administración de usuarios", "Crear, editar y cambiar contraseñas"):
                 import re
-                import bcrypt
 
                 def save_user_store(store_dict):
                     try:

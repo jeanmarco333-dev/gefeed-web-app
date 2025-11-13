@@ -1,6 +1,6 @@
-"""Utility helpers for generating bcrypt hashes compatible with Streamlit Authenticator.
+"""Utility helpers for generating bcrypt hashes compatible with the app.
 
-Este script produce hashes bcrypt (vía ``streamlit-authenticator``) para que puedas
+Este script produce hashes bcrypt (sin dependencias externas) para que puedas
 copiarlos y pegarlos en ``config_users.yaml`` u otro archivo de configuración.
 
 Uso rápido:
@@ -19,22 +19,28 @@ import argparse
 import getpass
 from typing import Iterable, List
 
-from streamlit_authenticator import Hasher
+import bcrypt
 
 
 def generate_hashes(passwords: Iterable[str]) -> List[str]:
     """Return the bcrypt hashes for the provided passwords."""
 
-    # ``Hasher`` espera una lista con todas las contraseñas a hashear.
     password_list = list(passwords)
     if not password_list:
         return []
-    return Hasher(password_list).generate()
+
+    hashes: List[str] = []
+    for password in password_list:
+        if not password:
+            continue
+        hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12))
+        hashes.append(hashed.decode("utf-8"))
+    return hashes
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Genera hashes bcrypt compatibles con Streamlit Authenticator",
+        description="Genera hashes bcrypt compatibles con la app Streamlit",
     )
     parser.add_argument(
         "passwords",
