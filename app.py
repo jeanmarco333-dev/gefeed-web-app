@@ -1779,14 +1779,29 @@ def validate_upload_size(uploaded_file, *, label: str) -> bool:
 # ------------------------------------------------------------------------------
 # IO helpers (cache)
 # ------------------------------------------------------------------------------
+def _cache_bust_key(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
 @st.cache_data
-def load_alimentos() -> pd.DataFrame:
-    try: df = pd.read_csv(ALIM_PATH, encoding="utf-8-sig")
-    except Exception: df = pd.DataFrame(columns=ALIM_COLS)
+def _load_alimentos_cached(_cache_bust: float) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(ALIM_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame(columns=ALIM_COLS)
     if df.shape[1] == 1:
-        try: df = pd.read_csv(ALIM_PATH, sep=";", encoding="utf-8-sig")
-        except: pass
+        try:
+            df = pd.read_csv(ALIM_PATH, sep=";", encoding="utf-8-sig")
+        except Exception:
+            pass
     return _normalize_columns(df)
+
+
+def load_alimentos() -> pd.DataFrame:
+    return _load_alimentos_cached(_cache_bust_key(ALIM_PATH))
 
 def save_alimentos(df: pd.DataFrame):
     _normalize_columns(df.copy()).to_csv(ALIM_PATH, index=False, encoding="utf-8")
@@ -2313,9 +2328,15 @@ def build_raciones_from_recipes() -> list:
 
     return raciones
 @st.cache_data
+def _load_base_cached(_cache_bust: float) -> pd.DataFrame:
+    try:
+        return pd.read_csv(BASE_PATH, encoding="utf-8-sig")
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_base() -> pd.DataFrame:
-    try: return pd.read_csv(BASE_PATH, encoding="utf-8-sig")
-    except: return pd.DataFrame()
+    return _load_base_cached(_cache_bust_key(BASE_PATH))
 
 def save_base(df: pd.DataFrame):
     df.to_csv(BASE_PATH, index=False, encoding="utf-8")
