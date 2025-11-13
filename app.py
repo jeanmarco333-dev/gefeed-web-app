@@ -1133,7 +1133,6 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 BASE_EXPECTED_COLUMNS = [
     "nro_corral",
-    "cod_racion",
     "nombre_racion",
     "categ",
     "PV_kg",
@@ -1142,7 +1141,6 @@ BASE_EXPECTED_COLUMNS = [
     "nro_cab",
     "mixer_id",
     "capacidad_kg",
-    "kg_turno",
     "turnos",
     "meta_salida",
 ]
@@ -1158,7 +1156,7 @@ BASE_PREVIEW_COLUMNS = [
     "meta_salida",
 ]
 
-BASE_OPTIONAL_COLUMNS = ["tipo_racion"]
+BASE_OPTIONAL_COLUMNS = ["tipo_racion", "cod_racion", "kg_turno"]
 
 
 def mark_changed(event: str, username: str):
@@ -1490,11 +1488,9 @@ if not CATALOG_PATH.exists():
 if not RECIPES_PATH.exists():
     pd.DataFrame(columns=["id_racion","nombre_racion","ingrediente","pct_ms"]).to_csv(RECIPES_PATH, index=False, encoding="utf-8")
 if not BASE_PATH.exists():
-    pd.DataFrame(columns=[
-        "nro_corral","cod_racion","nombre_racion","categ",
-        "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
-        "kg_turno","turnos","meta_salida"
-    ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
+    pd.DataFrame(columns=BASE_EXPECTED_COLUMNS).to_csv(
+        BASE_PATH, index=False, encoding="utf-8"
+    )
 if not REQENER_PATH.exists():
     pd.DataFrame(columns=REQENER_COLS).to_csv(REQENER_PATH, index=False, encoding="utf-8")
 if not REQPROT_PATH.exists():
@@ -2351,6 +2347,11 @@ def load_base() -> pd.DataFrame:
     drop_cols = [col for col in BASE_OPTIONAL_COLUMNS if col in df.columns]
     if drop_cols:
         df = df.drop(columns=drop_cols)
+    for col in BASE_EXPECTED_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    ordered_cols = [col for col in BASE_EXPECTED_COLUMNS if col in df.columns]
+    df = df[ordered_cols]
     return df
 
 
@@ -2563,9 +2564,16 @@ with tab_home:
             base_df.get("nro_cab"), index=base_df.index
         )
         total_animales = int(base_df["nro_cab"].sum())
-        base_df["categ"] = base_df.get("categ", "").astype(str).str.lower().str.strip()
-        va = int(base_df.loc[base_df["categ"].str.startswith("va"), "nro_cab"].sum())
-        nov = int(base_df.loc[base_df["categ"].str.startswith("nov"), "nro_cab"].sum())
+        categ_norm = (
+            base_df.get("categ", "")
+            .astype(str)
+            .str.lower()
+            .str.strip()
+        )
+        va_mask = categ_norm.str.contains("vaq", case=False, na=False)
+        nov_mask = categ_norm.str.contains("nov", case=False, na=False)
+        va = int(base_df.loc[va_mask, "nro_cab"].sum())
+        nov = int(base_df.loc[nov_mask, "nro_cab"].sum())
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Visitas (hoy)", snap.get("today_visits", 0))
@@ -2688,8 +2696,6 @@ with tab_corrales:
             base = pd.DataFrame({
                 "nro_corral": list(range(1, 21)),
                 "nombre_racion": ["" for _ in range(20)],
-                "cod_racion": ["" for _ in range(20)],
-                "tipo_racion": [""] * 20,
                 "categ": ["va"] * 20,
                 "PV_kg": [275] * 20,
                 "CV_pct": [2.8] * 20,
@@ -2697,7 +2703,6 @@ with tab_corrales:
                 "nro_cab": [0] * 20,
                 "mixer_id": [mixers[0] if mixers else ""] * 20,
                 "capacidad_kg": [mixer_cap_map.get(mixers[0], 0) if mixers else 0] * 20,
-                "kg_turno": [0.0] * 20,
                 "turnos": [4] * 20,
                 "meta_salida": [350] * 20,
             })
@@ -2797,7 +2802,7 @@ with tab_corrales:
             base_animals["nro_cab"] = normalize_animal_counts(
                 base_animals.get("nro_cab"), index=base_animals.index
             )
-            base_animals["categ"] = (
+            base_animals["categ_norm"] = (
                 base_animals.get("categ", "")
                 .astype(str)
                 .str.lower()
@@ -2806,12 +2811,18 @@ with tab_corrales:
             total_animales = int(base_animals["nro_cab"].sum())
             va_total = int(
                 base_animals.loc[
-                    base_animals["categ"].str.startswith("va"), "nro_cab"
+                    base_animals["categ_norm"].str.contains(
+                        "vaq", case=False, na=False
+                    ),
+                    "nro_cab",
                 ].sum()
             )
             nov_total = int(
                 base_animals.loc[
-                    base_animals["categ"].str.startswith("nov"), "nro_cab"
+                    base_animals["categ_norm"].str.contains(
+                        "nov", case=False, na=False
+                    ),
+                    "nro_cab",
                 ].sum()
             )
         else:
@@ -2822,64 +2833,99 @@ with tab_corrales:
         mc2.metric("Vaquillonas", f"{va_total:,}")
         mc3.metric("Novillos", f"{nov_total:,}")
 
+        stock_checks: dict[str, int] = {}
         stock_preview = base_animals.copy()
         if not stock_preview.empty:
-            stock_preview["tipo_racion"] = (
-                stock_preview.get("tipo_racion", "")
-                .astype(str)
-                .str.strip()
-            )
-            stock_preview.loc[
-                stock_preview["tipo_racion"] == "",
-                "tipo_racion",
-            ] = "Sin tipo"
-            stock_preview["categ_label"] = (
-                stock_preview.get("categ", "")
-                .astype(str)
-                .str.strip()
-                .str.lower()
-            )
-
-            def _label_categoria(value: str) -> str:
-                if value.startswith("va"):
-                    return "Vaquillonas"
-                if value.startswith("nov"):
-                    return "Novillos"
-                return "Otros"
-
-            stock_preview["categoria"] = stock_preview["categ_label"].apply(_label_categoria)
             stock_preview["nro_cab"] = normalize_animal_counts(
                 stock_preview.get("nro_cab"), index=stock_preview.index
             )
+            stock_preview["categ_display"] = (
+                stock_preview.get("categ", "")
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+            stock_preview["categ_display"] = stock_preview["categ_display"].replace(
+                {"": "Sin categoría"}
+            )
 
-            stock_group = (
-                stock_preview.groupby("categoria", dropna=False)["nro_cab"]
+            stock_cat = (
+                stock_preview.groupby("categ_display", dropna=False)["nro_cab"]
                 .sum()
                 .reset_index()
+                .rename(columns={"categ_display": "Categoría", "nro_cab": "Cabezas"})
             )
-            if not stock_group.empty:
-                ordered_labels = ["Vaquillonas", "Novillos", "Otros"]
-                order_map = {label: pos for pos, label in enumerate(ordered_labels)}
-                stock_group["categoria"] = stock_group["categoria"].fillna("Sin categoría")
-                stock_group["categoria"] = stock_group["categoria"].replace({"": "Sin categoría"})
-                stock_group = stock_group.sort_values(
-                    by="categoria",
-                    key=lambda s: s.map(order_map).fillna(len(order_map)),
-                )
-                stock_display = stock_group.rename(
-                    columns={"categoria": "Categoría", "nro_cab": "Animales"}
-                )
-                total_row = pd.DataFrame(
-                    [{"Categoría": "Total", "Animales": int(stock_display["Animales"].sum())}]
-                )
-                stock_display = pd.concat([stock_display, total_row], ignore_index=True)
+            stock_cat = stock_cat.sort_values("Cabezas", ascending=False)
+            total_row = pd.DataFrame(
+                [{"Categoría": "Total", "Cabezas": int(stock_cat["Cabezas"].sum())}]
+            )
+            stock_cat = pd.concat([stock_cat, total_row], ignore_index=True)
 
-                st.markdown("#### Stock por categoría")
-                st.dataframe(
-                    stock_display,
-                    use_container_width=True,
-                    hide_index=True,
+            st.markdown("#### Stock por categoría")
+            st.dataframe(
+                stock_cat,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            stock_preview["nombre_racion"] = (
+                stock_preview.get("nombre_racion", "")
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+            stock_preview["nombre_racion"] = stock_preview["nombre_racion"].replace(
+                {"": "Sin ración"}
+            )
+
+            stock_racion = (
+                stock_preview.groupby("nombre_racion", dropna=False)["nro_cab"]
+                .sum()
+                .reset_index()
+                .rename(columns={"nombre_racion": "Ración", "nro_cab": "Cabezas"})
+            )
+
+            if not cat_df.empty and {"nombre", "etapa"}.issubset(cat_df.columns):
+                catalog_info = (
+                    cat_df[["nombre", "etapa"]]
+                    .drop_duplicates()
+                    .rename(columns={"nombre": "Ración", "etapa": "Etapa"})
                 )
+                stock_racion = stock_racion.merge(catalog_info, on="Ración", how="left")
+
+            stock_racion = stock_racion.sort_values("Cabezas", ascending=False)
+
+            st.markdown("#### Stock por ración")
+            st.dataframe(
+                stock_racion,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            stock_checks = {
+                "filas": int(len(stock_preview)),
+                "cabezas": int(stock_preview["nro_cab"].sum()),
+                "sin_racion": int(
+                    stock_racion.loc[stock_racion["Ración"] == "Sin ración", "Cabezas"].sum()
+                ),
+            }
+
+        with st.expander("🔍 Verificaciones rápidas de corrales", expanded=False):
+            st.caption(f"Filas cargadas: {stock_checks.get('filas', 0)}")
+            st.caption(f"Cabezas totales: {stock_checks.get('cabezas', 0)}")
+            if stock_checks.get("sin_racion", 0) > 0:
+                st.warning(
+                    f"Hay {stock_checks['sin_racion']:,} cabezas sin ración asignada. Revisá la tabla."
+                )
+            if not enriched.empty:
+                key_cols = ["kg_turno_calc", "kg_turno_asfed_calc"]
+                available_cols = [col for col in key_cols if col in enriched.columns]
+                if available_cols:
+                    na_pct = (
+                        enriched[available_cols].isna().mean().mul(100).round(1).to_dict()
+                    )
+                    resumen = ", ".join(f"{col}: {pct}%" for col, pct in na_pct.items())
+                    st.caption(f"NaN en cálculos clave (%): {resumen or '0%'}")
 
         preview_cols = [col for col in BASE_PREVIEW_COLUMNS if col in base.columns]
         if preview_cols:
@@ -2940,9 +2986,6 @@ with tab_corrales:
             "nro_corral",
             "nombre_racion",
             "categ",
-            "PV_kg",
-            "CV_pct",
-            "AP_preten",
             "nro_cab",
             "mixer_id",
             "capacidad_kg",
