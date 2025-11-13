@@ -1,9 +1,9 @@
-# Autenticación en Streamlit Authenticator (paso a paso)
+# Autenticación con contraseñas bcrypt (paso a paso)
 
 Este procedimiento explica, de principio a fin, cómo preparar `config_users.yaml` para
-que el inicio de sesión funcione usando [streamlit-authenticator]. Está pensado para el
-repositorio actual y se puede repetir cada vez que quieras actualizar usuarios o
-contraseñas.
+que el inicio de sesión funcione con el sistema de autenticación incorporado en esta
+app. Está pensado para el repositorio actual y se puede repetir cada vez que quieras
+actualizar usuarios o contraseñas.
 
 ## 1. Instala dependencias (si aún no lo hiciste)
 
@@ -11,7 +11,7 @@ contraseñas.
 pip install -r requirements.txt
 ```
 
-Esto incluye `streamlit-authenticator`, necesario para generar hashes bcrypt.
+Esto instala `bcrypt`, necesario para generar hashes seguros.
 
 ## 2. Genera hashes seguros para tus contraseñas
 
@@ -55,7 +55,8 @@ necesario.
 
 4. Mantén las comillas dobles alrededor del hash para evitar errores de parseo.
 5. (Opcional pero recomendado) Actualiza `cookie.key` y `cookie.name` con valores nuevos
-   y largos para invalidar sesiones anteriores.
+   y largos para invalidar sesiones anteriores. La app usa estos campos como "semilla"
+   de sesión para determinar cuándo forzar un re-login.
 
 ## 4. Limpia cookies antiguas
 
@@ -83,5 +84,3 @@ paso 2 con una nueva clave. No es necesario conocer la contraseña actual para
 reemplazar el hash.
 
 ---
-
-[streamlit-authenticator]: https://github.com/mkhorasani/Streamlit-Authenticator

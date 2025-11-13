@@ -11,7 +11,7 @@ categories:
     - CSS Custom Theme (tema ganadero claro/oscuro)
     - HTML5 / Markdown para maquetado dinámico
   Seguridad y autenticación:
-    - streamlit-authenticator (bcrypt + cookies seguras)
+    - Autenticación propia con bcrypt
     - YAML credentials config
   Persistencia y backup:
     - CSV locales por usuario (`data/users/<usuario>/…`)
