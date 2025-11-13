@@ -2400,6 +2400,10 @@ def save_base(df: pd.DataFrame):
         if col not in out.columns:
             out[col] = pd.NA
     out = out[[col for col in BASE_EXPECTED_COLUMNS if col in out.columns]]
+    if "nro_cab" in out.columns:
+        out["nro_cab"] = (
+            pd.to_numeric(out["nro_cab"], errors="coerce").fillna(0).astype(int)
+        )
     out.to_csv(BASE_PATH, index=False, encoding="utf-8")
     success = backup_user_file(BASE_PATH, "Actualizar base de corrales")
     audit_log_append(
@@ -2739,25 +2743,23 @@ with tab_corrales:
         )
 
         categoria_series: list[pd.Series] = []
-        if "sexo" in cat_df.columns:
-            categoria_series.append(cat_df["sexo"].dropna())
-        if "categ" in base.columns:
+
+        if "categ" in base.columns and not base["categ"].dropna().empty:
             categoria_series.append(base["categ"].dropna())
-        if categoria_series:
-            categorias = sorted(
-                {
-                    str(value).strip()
-                    for series in categoria_series
-                    for value in series.astype(str)
-                    if str(value).strip()
-                },
-                key=str.lower,
-            )
-        else:
-            categorias = ["Vaquillonas", "Novillos", "va", "nov"]
+        elif "sexo" in cat_df.columns and not cat_df["sexo"].dropna().empty:
+            categoria_series.append(cat_df["sexo"].dropna())
+
+        categorias_raw: set[str] = set()
+        for series in categoria_series:
+            for value in series.astype(str):
+                v = value.strip()
+                if v:
+                    categorias_raw.add(v)
+
+        categorias = sorted(categorias_raw, key=str.lower)
 
         if not categorias:
-            categorias = ["Vaquillonas", "Novillos", "va", "nov"]
+            categorias = ["va", "nov"]
 
         pesos_series = load_pesos().get("peso_kg", pd.Series(dtype=float))
         pesos_numeric = pd.to_numeric(pesos_series, errors="coerce").dropna()
@@ -2864,6 +2866,12 @@ with tab_corrales:
                             )
                         else:
                             ordered_df = imported_df[BASE_EXPECTED_COLUMNS].copy()
+
+                            if "nro_cab" in ordered_df.columns:
+                                ordered_df["nro_cab"] = normalize_animal_counts(
+                                    ordered_df["nro_cab"], index=ordered_df.index
+                                )
+
                             save_base(ordered_df)
                             st.success(
                                 "✅ Corrales actualizados correctamente. Se recargará la vista."
@@ -2876,6 +2884,11 @@ with tab_corrales:
         if not base_animals.empty:
             base_animals["nro_cab"] = normalize_animal_counts(
                 base_animals.get("nro_cab"), index=base_animals.index
+            )
+            base_animals["nro_cab"] = (
+                pd.to_numeric(base_animals["nro_cab"], errors="coerce")
+                .fillna(0)
+                .astype(int)
             )
             base_animals["categ_norm"] = (
                 base_animals.get("categ", "")
@@ -2913,6 +2926,11 @@ with tab_corrales:
         if not stock_preview.empty:
             stock_preview["nro_cab"] = normalize_animal_counts(
                 stock_preview.get("nro_cab"), index=stock_preview.index
+            )
+            stock_preview["nro_cab"] = (
+                pd.to_numeric(stock_preview["nro_cab"], errors="coerce")
+                .fillna(0)
+                .astype(int)
             )
             stock_preview["categ_display"] = (
                 stock_preview.get("categ", "")
