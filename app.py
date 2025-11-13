@@ -2640,7 +2640,8 @@ with tab_corrales:
                 "meta_salida": [350] * 20,
             })
 
-        base_animals = base.copy()
+        enriched = enrich_and_calc_base(base)
+        base_animals = enriched.copy()
         if not base_animals.empty:
             base_animals["nro_cab"] = pd.to_numeric(
                 base_animals.get("nro_cab", 0), errors="coerce"
@@ -2669,6 +2670,81 @@ with tab_corrales:
         mc1.metric("Total animales", f"{total_animales:,}")
         mc2.metric("Vaquillonas", f"{va_total:,}")
         mc3.metric("Novillos", f"{nov_total:,}")
+
+        stock_preview = base_animals.copy()
+        if not stock_preview.empty:
+            stock_preview["tipo_racion"] = (
+                stock_preview.get("tipo_racion", "")
+                .astype(str)
+                .str.strip()
+            )
+            stock_preview.loc[
+                stock_preview["tipo_racion"] == "",
+                "tipo_racion",
+            ] = "Sin tipo"
+            stock_preview["categ_label"] = (
+                stock_preview.get("categ", "")
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+
+            def _label_categoria(value: str) -> str:
+                if value.startswith("va"):
+                    return "Vaquillonas"
+                if value.startswith("nov"):
+                    return "Novillos"
+                return "Otros"
+
+            stock_preview["categoria"] = stock_preview["categ_label"].apply(_label_categoria)
+            stock_preview["nro_cab"] = pd.to_numeric(
+                stock_preview.get("nro_cab", 0), errors="coerce"
+            ).fillna(0).astype(int)
+
+            stock_group = (
+                stock_preview.groupby(["tipo_racion", "categoria"], dropna=False)["nro_cab"]
+                .sum()
+                .reset_index()
+            )
+            if not stock_group.empty:
+                stock_pivot = (
+                    stock_group.pivot(
+                        index="tipo_racion",
+                        columns="categoria",
+                        values="nro_cab",
+                    )
+                    .fillna(0)
+                    .astype(int)
+                )
+                ordered_cols = [col for col in ["Vaquillonas", "Novillos", "Otros"] if col in stock_pivot.columns]
+                stock_pivot = stock_pivot.reindex(columns=ordered_cols)
+                stock_pivot["Total"] = stock_pivot.sum(axis=1)
+                stock_pivot = stock_pivot.sort_values(
+                    by=["Total", "tipo_racion"], ascending=[False, True]
+                )
+                stock_display = stock_pivot.reset_index().rename(
+                    columns={"tipo_racion": "Tipo de ración"}
+                )
+                total_row = {
+                    "Tipo de ración": "Total",
+                }
+                for col in ordered_cols:
+                    total_row[col] = int(stock_display[col].sum())
+                total_row["Total"] = int(stock_display["Total"].sum())
+                stock_display = pd.concat(
+                    [
+                        stock_display,
+                        pd.DataFrame([total_row]),
+                    ],
+                    ignore_index=True,
+                )
+
+                st.markdown("#### Stock por tipo de ración y categoría")
+                st.dataframe(
+                    stock_display,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
         racion_options = cat_df["nombre"].astype(str).tolist() if "nombre" in cat_df.columns else []
 
@@ -2725,7 +2801,6 @@ with tab_corrales:
         ]
 
         with st.form("form_base"):
-            enriched = enrich_and_calc_base(base)
             grid = st.data_editor(
                 enriched[display_cols],
                 column_config=colcfg,
