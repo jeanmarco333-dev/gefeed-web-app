@@ -18,21 +18,26 @@ def _log_path() -> Path:
 
 
 def _ensure_header(path: Path | None = None) -> Path:
+    """Ensure the activity log has a header, ignoring write failures."""
+
     target = path or _log_path()
-    try:
-        exists = target.exists()
-    except OSError:
-        # Some environments raise OSError (e.g. permission issues) when checking
-        # for existence. Fall back to treating the file as missing so we can
-        # attempt to create it inside a writable directory.
-        exists = False
-        target.parent.mkdir(parents=True, exist_ok=True)
-    if not exists:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle, delimiter="|")
-            writer.writerow(HEADER)
+    _safe_ensure_log_file(target)
     return target
+
+
+def _safe_ensure_log_file(path: Path) -> None:
+    """Create the log file and header without raising on read-only FS."""
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            with open(path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle, delimiter="|")
+                writer.writerow(HEADER)
+    except Exception:
+        # Fall back to a no-op when the filesystem is not writable. Logging will
+        # be silently disabled, but the rest of the app can continue running.
+        pass
 
 
 def get_log_path(ensure: bool = False) -> Path:
@@ -50,9 +55,17 @@ def log_event(op: str, accion: str, detalle: str = "", trace_id: str | None = No
     path = _ensure_header()
     now = datetime.now().isoformat(timespec="seconds")
     trace = trace_id or uuid.uuid4().hex[:8]
-    with open(path, "a", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle, delimiter="|")
-        writer.writerow([op.strip() or "operador", now, accion, detalle, trace])
+
+    try:
+        with open(path, "a", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle, delimiter="|")
+            writer.writerow([op.strip() or "operador", now, accion, detalle, trace])
+    except Exception:
+        # Fall back to a best-effort log when writes are not possible. The
+        # application should continue running even if the activity log is
+        # unavailable (e.g. read-only filesystem).
+        pass
+
     return trace
 
 
@@ -65,12 +78,19 @@ def read_events(limit: int | None = None) -> list[list[str]]:
     """Return the most recent events as a list of rows."""
 
     path = get_log_path()
-    if not path.exists():
+
+    try:
+        if not path.exists():
+            return []
+    except Exception:
         return []
 
-    with open(path, "r", encoding="utf-8") as handle:
-        reader = csv.reader(handle, delimiter="|")
-        rows = list(reader)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            reader = csv.reader(handle, delimiter="|")
+            rows = list(reader)
+    except Exception:
+        return []
 
     if not rows:
         return []
