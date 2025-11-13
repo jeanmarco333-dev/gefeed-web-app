@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import os
+import tempfile
 import zipfile
 import hashlib
 from contextlib import contextmanager
@@ -49,8 +50,24 @@ from reportlab.pdfgen import canvas
 # Paths (multiusuario)
 # ------------------------------------------------------------------------------
 DATA_DIR_ENV = os.getenv("DATA_DIR")
-GLOBAL_DATA_DIR = Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data")
-GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_writable_dir(preferred: Path) -> Path:
+    """Return a directory that we can write to, falling back to /tmp if needed."""
+
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        probe = preferred / ".write-test"
+        probe.touch()
+        probe.unlink()
+        return preferred
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "gefeed-data"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+GLOBAL_DATA_DIR = _ensure_writable_dir(Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data"))
 
 os.environ.setdefault("DATA_DIR", str(GLOBAL_DATA_DIR))
 os.environ.setdefault("BACKUP_DIR", str(GLOBAL_DATA_DIR / "backups"))
