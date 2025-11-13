@@ -10,7 +10,6 @@ import base64
 import io
 import json
 import os
-import shutil
 import tempfile
 import zipfile
 import hashlib
@@ -56,26 +55,25 @@ DATA_DIR_ENV = os.getenv("DATA_DIR")
 def _ensure_writable_dir(preferred: Path) -> Path:
     """Return a directory that we can write to, falling back to /tmp if needed."""
 
-    try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        probe = preferred / ".write-test"
-        probe.touch()
-        probe.unlink()
-        return preferred
-    except OSError:
-        fallback = Path(tempfile.gettempdir()) / "gefeed-data"
-        fallback.mkdir(parents=True, exist_ok=True)
+    candidates: list[Path] = []
 
-        # If we had to fall back, mirror the read-only seed data so the app can start.
-        if preferred.exists():
-            for child in preferred.iterdir():
-                destination = fallback / child.name
-                if child.is_dir():
-                    shutil.copytree(child, destination, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(child, destination)
+    if preferred is not None:
+        candidates.append(preferred)
 
-        return fallback
+    candidates.append(Path(tempfile.gettempdir()) / "gefeed-data")
+
+    for base in candidates:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            test_file = base / ".write_test"
+            with open(test_file, "w") as handle:
+                handle.write("ok")
+            test_file.unlink(missing_ok=True)
+            return base
+        except OSError:
+            continue
+
+    raise RuntimeError("No writable data directory found")
 
 
 GLOBAL_DATA_DIR = _ensure_writable_dir(Path(DATA_DIR_ENV) if DATA_DIR_ENV else Path("data"))
