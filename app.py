@@ -1131,6 +1131,34 @@ MAX_CORRALES = 200
 MAX_UPLOAD_MB = 5
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
+BASE_EXPECTED_COLUMNS = [
+    "tipo_racion",
+    "nro_corral",
+    "cod_racion",
+    "nombre_racion",
+    "categ",
+    "PV_kg",
+    "CV_pct",
+    "AP_preten",
+    "nro_cab",
+    "mixer_id",
+    "capacidad_kg",
+    "kg_turno",
+    "turnos",
+    "meta_salida",
+]
+
+BASE_PREVIEW_COLUMNS = [
+    "nro_corral",
+    "nombre_racion",
+    "categ",
+    "nro_cab",
+    "mixer_id",
+    "capacidad_kg",
+    "turnos",
+    "meta_salida",
+]
+
 
 def mark_changed(event: str, username: str):
     """Marca el último cambio persistido por el usuario autenticado."""
@@ -2677,6 +2705,92 @@ with tab_corrales:
                 "meta_salida": [350] * 20,
             })
 
+        export_df = base.copy()
+        for column in BASE_EXPECTED_COLUMNS:
+            if column not in export_df.columns:
+                export_df[column] = pd.NA
+        export_df = export_df[BASE_EXPECTED_COLUMNS]
+
+        st.markdown("#### 📁 Importar / exportar CSV de corrales")
+        export_col, import_col = st.columns(2)
+        with export_col:
+            st.download_button(
+                "⬇️ Descargar CSV actual",
+                data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="corrales.csv",
+                mime="text/csv",
+                key="corrales_export_csv",
+            )
+        with import_col:
+            uploaded_corrales = st.file_uploader(
+                "Subí un CSV con la misma estructura",
+                type=["csv"],
+                key="corrales_import_csv",
+                help="Reemplaza toda la base guardada.",
+            )
+            st.caption(
+                "Columnas esperadas: " + ", ".join(BASE_EXPECTED_COLUMNS)
+            )
+            if (
+                uploaded_corrales is not None
+                and validate_upload_size(uploaded_corrales, label="CSV de corrales")
+            ):
+                try:
+                    uploaded_corrales.seek(0)
+                    imported_df = pd.read_csv(uploaded_corrales, encoding="utf-8-sig")
+                except Exception as exc:
+                    st.error(f"Error leyendo el archivo: {exc}")
+                    audit_log_append(
+                        "import_corrales_error",
+                        f"Lectura fallida de {getattr(uploaded_corrales, 'name', 'archivo')}",
+                        status="error",
+                        meta={"error": str(exc)},
+                    )
+                else:
+                    imported_df.columns = imported_df.columns.astype(str).str.strip()
+                    duplicated = (
+                        imported_df.columns[imported_df.columns.duplicated()].tolist()
+                    )
+                    if duplicated:
+                        st.error(
+                            "⚠️ El archivo tiene columnas duplicadas: "
+                            + ", ".join(duplicated)
+                        )
+                        audit_log_append(
+                            "import_corrales_invalid_columns",
+                            "Columnas duplicadas en CSV de corrales",
+                            status="blocked",
+                            meta={"duplicated": duplicated},
+                        )
+                    else:
+                        missing = [
+                            col for col in BASE_EXPECTED_COLUMNS if col not in imported_df.columns
+                        ]
+                        extra = [
+                            col for col in imported_df.columns if col not in BASE_EXPECTED_COLUMNS
+                        ]
+                        if missing or extra:
+                            message = "⚠️ El archivo no coincide con la estructura esperada."
+                            if missing:
+                                message += "\nFaltan: " + ", ".join(sorted(missing))
+                            if extra:
+                                message += "\nSobran: " + ", ".join(sorted(extra))
+                            st.error(message)
+                            audit_log_append(
+                                "import_corrales_invalid_columns",
+                                "Columnas inesperadas en CSV de corrales",
+                                status="blocked",
+                                meta={"missing": missing, "extra": extra},
+                            )
+                        else:
+                            ordered_df = imported_df[BASE_EXPECTED_COLUMNS].copy()
+                            save_base(ordered_df)
+                            st.success(
+                                "✅ Corrales actualizados correctamente. Se recargará la vista."
+                            )
+                            st.toast("Corrales actualizados desde CSV.", icon="📥")
+                            rerun_with_cache_reset()
+
         enriched = enrich_and_calc_base(base)
         base_animals = enriched.copy()
         if not base_animals.empty:
@@ -2766,6 +2880,25 @@ with tab_corrales:
                     use_container_width=True,
                     hide_index=True,
                 )
+
+        preview_cols = [col for col in BASE_PREVIEW_COLUMNS if col in base.columns]
+        if preview_cols:
+            clean_preview = base[preview_cols].copy()
+            if "nro_cab" in clean_preview.columns:
+                clean_preview["nro_cab"] = normalize_animal_counts(
+                    clean_preview["nro_cab"], index=clean_preview.index
+                )
+            if "nro_corral" in clean_preview.columns:
+                clean_preview = clean_preview.sort_values(
+                    by="nro_corral",
+                    key=lambda s: pd.to_numeric(s, errors="coerce"),
+                )
+            st.markdown("#### 📋 Vista de corrales (limpia)")
+            st.dataframe(
+                clean_preview.reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         racion_options = cat_df["nombre"].astype(str).tolist() if "nombre" in cat_df.columns else []
 
