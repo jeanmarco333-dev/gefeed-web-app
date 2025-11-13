@@ -2434,6 +2434,28 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
         )
     else:
         nombre_to_cv = {}
+
+    sexo_series = cat_df.get("sexo")
+    if sexo_series is not None:
+        nombre_to_categoria = dict(
+            zip(
+                cat_names,
+                sexo_series.fillna("").astype(str).str.strip(),
+            )
+        )
+    else:
+        nombre_to_categoria = {}
+
+    pv_series = cat_df.get("pv_kg")
+    if pv_series is not None:
+        nombre_to_pv = dict(
+            zip(
+                cat_names,
+                pd.to_numeric(pv_series, errors="coerce").fillna(0.0),
+            )
+        )
+    else:
+        nombre_to_pv = {}
     mix_clean = mix_df.dropna(subset=["mixer_id"]).copy()
     mix_clean["mixer_id"] = mix_clean["mixer_id"].astype(str)
     mixer_cap_map = dict(zip(mix_clean["mixer_id"], mix_clean["capacidad_kg"]))
@@ -2444,6 +2466,7 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
     for col, default in {
         "nombre_racion": "",
         "tipo_racion": "",
+        "categ": "",
         "CV_pct": 0.0,
         "turnos": 1,
         "nro_cab": 0,
@@ -2474,6 +2497,27 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
         return float(current)
 
     df["CV_pct"] = df.apply(_cv, axis=1)
+
+    if nombre_to_categoria:
+        df["categ"] = df.apply(
+            lambda row: (
+                nombre_to_categoria.get(str(row.get("nombre_racion", "")), "")
+                if not str(row.get("categ", "")).strip()
+                else str(row.get("categ", "")).strip()
+            ),
+            axis=1,
+        )
+
+    if nombre_to_pv:
+        def _pv(row: pd.Series) -> float:
+            current = pd.to_numeric(row.get("PV_kg"), errors="coerce")
+            if pd.isna(current) or float(current) == 0.0:
+                nombre = str(row.get("nombre_racion", ""))
+                return float(nombre_to_pv.get(nombre, 0.0))
+            return float(current)
+
+        df["PV_kg"] = df.apply(_pv, axis=1)
+
     df["capacidad_kg"] = df["mixer_id"].map(mixer_cap_map).fillna(0)
 
     def kg_turno_calc(r):
@@ -2686,12 +2730,38 @@ with tab_corrales:
         base = load_base()
 
         etapas_series = cat_df.get("etapa", pd.Series(dtype=str))
-        tipos = sorted([t for t in etapas_series.dropna().astype(str).unique() if t.strip()]) or [
-            "Terminación",
-            "Recría",
-        ]
-        categorias = ["va", "nov"]
-        pesos_lista = load_pesos()["peso_kg"].tolist()
+        tipos = (
+            sorted(
+                {t.strip() for t in etapas_series.dropna().astype(str) if t and t.strip()},
+                key=str.lower,
+            )
+            or ["Terminación", "Recría"]
+        )
+
+        categoria_series: list[pd.Series] = []
+        if "sexo" in cat_df.columns:
+            categoria_series.append(cat_df["sexo"].dropna())
+        if "categ" in base.columns:
+            categoria_series.append(base["categ"].dropna())
+        if categoria_series:
+            categorias = sorted(
+                {
+                    str(value).strip()
+                    for series in categoria_series
+                    for value in series.astype(str)
+                    if str(value).strip()
+                },
+                key=str.lower,
+            )
+        else:
+            categorias = ["Vaquillonas", "Novillos", "va", "nov"]
+
+        if not categorias:
+            categorias = ["Vaquillonas", "Novillos", "va", "nov"]
+
+        pesos_series = load_pesos().get("peso_kg", pd.Series(dtype=float))
+        pesos_numeric = pd.to_numeric(pesos_series, errors="coerce").dropna()
+        pesos_lista = sorted({float(p) for p in pesos_numeric.tolist()})
         mix_clean = mix_df.dropna(subset=["mixer_id"]).copy()
         mix_clean["mixer_id"] = mix_clean["mixer_id"].astype(str)
         mixers = mix_clean["mixer_id"].tolist()
@@ -2961,7 +3031,7 @@ with tab_corrales:
                 help="Autocompleta tipo y puede pisar CV%",
             ),
             "categ": st.column_config.SelectboxColumn("categ", options=categorias),
-            "PV_kg": st.column_config.SelectboxColumn("PV (kg)", options=pesos_lista),
+            "PV_kg": st.column_config.SelectboxColumn("PV (kg)", options=pesos_lista) if pesos_lista else st.column_config.NumberColumn("PV (kg)", min_value=0.0, max_value=1000.0, step=5.0),
             "CV_pct": st.column_config.NumberColumn("CV (%)", min_value=0.0, max_value=20.0, step=0.1),
             "AP_preten": st.column_config.NumberColumn("AP (kg) PRETEN", min_value=0.0, max_value=5.0, step=0.1),
             "nro_cab": st.column_config.NumberColumn("NRO CAB (und)", min_value=0, max_value=100000, step=1),
@@ -2973,36 +3043,27 @@ with tab_corrales:
             "meta_salida": st.column_config.NumberColumn("META DE SALIDA (kg)", min_value=0, max_value=2000, step=5),
         }
 
-        editable_cols = [
-            "nro_corral",
-            "nombre_racion",
-            "categ",
-            "PV_kg",
-            "CV_pct",
-            "AP_preten",
-            "nro_cab",
-            "mixer_id",
-            "capacidad_kg",
-            "turnos",
-            "meta_salida",
-        ]
+        editor_cols = [col for col in BASE_EXPECTED_COLUMNS if col in enriched.columns]
+        if not editor_cols:
+            editor_cols = BASE_EXPECTED_COLUMNS.copy()
 
-        display_cols = [
-            "nro_corral",
-            "nombre_racion",
-            "categ",
-            "nro_cab",
-            "mixer_id",
-            "capacidad_kg",
-            "turnos",
-            "meta_salida",
-        ]
+        grid_source = enriched[editor_cols].copy()
+        if "nro_cab" in grid_source.columns:
+            grid_source["nro_cab"] = normalize_animal_counts(
+                grid_source.get("nro_cab"), index=grid_source.index
+            )
+        if "nro_corral" in grid_source.columns:
+            grid_source = grid_source.sort_values(
+                by="nro_corral",
+                key=lambda s: pd.to_numeric(s, errors="coerce"),
+            )
+        grid_source = grid_source.reset_index(drop=True)
 
         with st.form("form_base"):
             grid = st.data_editor(
-                enriched[display_cols],
+                grid_source,
                 column_config=colcfg,
-                column_order=display_cols,
+                column_order=editor_cols,
                 num_rows="dynamic",
                 width="stretch",
                 hide_index=True,
@@ -3012,10 +3073,14 @@ with tab_corrales:
             save = c1.form_submit_button("💾 Guardar base", type="primary")
             refresh = c2.form_submit_button("🔄 Recargar")
             if save:
-                out = enriched.copy()
-                for col in editable_cols:
-                    if col in grid.columns:
-                        out[col] = grid[col]
+                if grid is None:
+                    grid_df = grid_source.copy()
+                else:
+                    grid_df = pd.DataFrame(grid).reset_index(drop=True)
+                out = enriched.copy().reset_index(drop=True)
+                for col in editor_cols:
+                    if col in grid_df.columns:
+                        out[col] = grid_df[col]
                 out = enrich_and_calc_base(out)
                 for col in ["kg_turno_calc", "kg_turno_asfed_calc"]:
                     if col in out.columns:
