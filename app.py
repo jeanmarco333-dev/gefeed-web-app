@@ -2458,6 +2458,11 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
     df["nombre_racion"] = df["nombre_racion"].fillna("").astype(str)
     df["mixer_id"] = df["mixer_id"].fillna("").astype(str)
 
+    # Normalizamos las cabezas antes de realizar cualquier cálculo numérico.
+    # Esto evita que valores con separadores de miles (por ejemplo "1.200")
+    # se interpreten como decimales (1.2) cuando se convierten con ``float``.
+    df["nro_cab"] = normalize_animal_counts(df.get("nro_cab"), index=df.index)
+
     df["cod_racion"] = df["nombre_racion"].map(nombre_to_id).fillna("")
     df["tipo_racion"] = df["nombre_racion"].map(nombre_to_tipo).fillna("")
 
