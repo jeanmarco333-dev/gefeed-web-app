@@ -2338,6 +2338,46 @@ def _load_base_cached(_cache_bust: float) -> pd.DataFrame:
 def load_base() -> pd.DataFrame:
     return _load_base_cached(_cache_bust_key(BASE_PATH))
 
+
+def normalize_animal_counts(
+    series: pd.Series | Any, *, index: pd.Index | None = None
+) -> pd.Series:
+    """Return a rounded integer series from arbitrary user inputs.
+
+    Los usuarios pueden ingresar números con separadores de miles en formato
+    español (puntos) o inglés (comas), e incluso con espacios. Esta función
+    limpia esos caracteres y convierte el resultado en enteros, asegurando que
+    los totales de animales se calculen correctamente.
+    """
+
+    if series is None:
+        if index is not None:
+            return pd.Series(0, index=index, dtype=int)
+        return pd.Series(dtype=int)
+
+    if isinstance(series, pd.Series):
+        if index is None:
+            index = series.index
+        work = series.astype(str).str.strip()
+    else:
+        if index is None and hasattr(series, "index"):
+            index = series.index  # type: ignore[attr-defined]
+        series = pd.Series(series, index=index)
+        work = series.astype(str).str.strip()
+
+    if work.empty:
+        if index is not None:
+            return pd.Series(0, index=index, dtype=int)
+        return pd.Series(dtype=int)
+
+    work = work.str.replace(r"\s+", "", regex=True)
+    work = work.str.replace(r"[.,\u00A0\u202F](?=\d{3}(?:\D|$))", "", regex=True)
+    work = work.str.replace(",", ".", regex=False)
+
+    numeric = pd.to_numeric(work, errors="coerce").fillna(0.0)
+    return numeric.round().astype(int)
+
+
 def save_base(df: pd.DataFrame):
     df.to_csv(BASE_PATH, index=False, encoding="utf-8")
     success = backup_user_file(BASE_PATH, "Actualizar base de corrales")
@@ -2499,7 +2539,9 @@ with tab_home:
     nov = 0
     if isinstance(base_df, pd.DataFrame) and not base_df.empty:
         base_df = base_df.copy()
-        base_df["nro_cab"] = pd.to_numeric(base_df.get("nro_cab", 0), errors="coerce").fillna(0).astype(int)
+        base_df["nro_cab"] = normalize_animal_counts(
+            base_df.get("nro_cab"), index=base_df.index
+        )
         total_animales = int(base_df["nro_cab"].sum())
         base_df["categ"] = base_df.get("categ", "").astype(str).str.lower().str.strip()
         va = int(base_df.loc[base_df["categ"].str.startswith("va"), "nro_cab"].sum())
@@ -2605,7 +2647,7 @@ if USER_IS_ADMIN and admin_tabs:
 # 📊 Stock & Corrales (principal)
 # ------------------------------------------------------------------------------
 with tab_corrales:
-    with card("📊 Stock, categorías y corrales", "Actualizá tipo de ración, categoría, cabezas y mezcla asignada por corral."):
+    with card("📊 Stock, categorías y corrales", "Actualizá ración, categoría, cabezas y mezcla asignada por corral."):
         cat_df = load_catalog()
         mix_df = load_mixers()
         base = load_base()
@@ -2643,9 +2685,9 @@ with tab_corrales:
         enriched = enrich_and_calc_base(base)
         base_animals = enriched.copy()
         if not base_animals.empty:
-            base_animals["nro_cab"] = pd.to_numeric(
-                base_animals.get("nro_cab", 0), errors="coerce"
-            ).fillna(0).astype(int)
+            base_animals["nro_cab"] = normalize_animal_counts(
+                base_animals.get("nro_cab"), index=base_animals.index
+            )
             base_animals["categ"] = (
                 base_animals.get("categ", "")
                 .astype(str)
@@ -2697,49 +2739,33 @@ with tab_corrales:
                 return "Otros"
 
             stock_preview["categoria"] = stock_preview["categ_label"].apply(_label_categoria)
-            stock_preview["nro_cab"] = pd.to_numeric(
-                stock_preview.get("nro_cab", 0), errors="coerce"
-            ).fillna(0).astype(int)
+            stock_preview["nro_cab"] = normalize_animal_counts(
+                stock_preview.get("nro_cab"), index=stock_preview.index
+            )
 
             stock_group = (
-                stock_preview.groupby(["tipo_racion", "categoria"], dropna=False)["nro_cab"]
+                stock_preview.groupby("categoria", dropna=False)["nro_cab"]
                 .sum()
                 .reset_index()
             )
             if not stock_group.empty:
-                stock_pivot = (
-                    stock_group.pivot(
-                        index="tipo_racion",
-                        columns="categoria",
-                        values="nro_cab",
-                    )
-                    .fillna(0)
-                    .astype(int)
+                ordered_labels = ["Vaquillonas", "Novillos", "Otros"]
+                order_map = {label: pos for pos, label in enumerate(ordered_labels)}
+                stock_group["categoria"] = stock_group["categoria"].fillna("Sin categoría")
+                stock_group["categoria"] = stock_group["categoria"].replace({"": "Sin categoría"})
+                stock_group = stock_group.sort_values(
+                    by="categoria",
+                    key=lambda s: s.map(order_map).fillna(len(order_map)),
                 )
-                ordered_cols = [col for col in ["Vaquillonas", "Novillos", "Otros"] if col in stock_pivot.columns]
-                stock_pivot = stock_pivot.reindex(columns=ordered_cols)
-                stock_pivot["Total"] = stock_pivot.sum(axis=1)
-                stock_pivot = stock_pivot.sort_values(
-                    by=["Total", "tipo_racion"], ascending=[False, True]
+                stock_display = stock_group.rename(
+                    columns={"categoria": "Categoría", "nro_cab": "Animales"}
                 )
-                stock_display = stock_pivot.reset_index().rename(
-                    columns={"tipo_racion": "Tipo de ración"}
+                total_row = pd.DataFrame(
+                    [{"Categoría": "Total", "Animales": int(stock_display["Animales"].sum())}]
                 )
-                total_row = {
-                    "Tipo de ración": "Total",
-                }
-                for col in ordered_cols:
-                    total_row[col] = int(stock_display[col].sum())
-                total_row["Total"] = int(stock_display["Total"].sum())
-                stock_display = pd.concat(
-                    [
-                        stock_display,
-                        pd.DataFrame([total_row]),
-                    ],
-                    ignore_index=True,
-                )
+                stock_display = pd.concat([stock_display, total_row], ignore_index=True)
 
-                st.markdown("#### Stock por tipo de ración y categoría")
+                st.markdown("#### Stock por categoría")
                 st.dataframe(
                     stock_display,
                     use_container_width=True,
@@ -2750,9 +2776,6 @@ with tab_corrales:
 
         colcfg = {
             "nro_corral": st.column_config.NumberColumn("n° de Corral", min_value=1, max_value=9999, step=1),
-            "tipo_racion": st.column_config.TextColumn(
-                "tipo de ración", help="Auto: se llena según la ración elegida", disabled=True
-            ),
             "nombre_racion": st.column_config.SelectboxColumn(
                 "nombre la ración",
                 options=[""] + racion_options,
@@ -2787,7 +2810,6 @@ with tab_corrales:
 
         display_cols = [
             "nro_corral",
-            "tipo_racion",
             "nombre_racion",
             "categ",
             "PV_kg",
@@ -2829,7 +2851,7 @@ with tab_corrales:
                 if "nombre_racion" in out_to_save.columns:
                     mask_nonempty |= out_to_save["nombre_racion"].astype(str).str.strip() != ""
                 if "nro_cab" in out_to_save.columns:
-                    mask_nonempty |= pd.to_numeric(out_to_save["nro_cab"], errors="coerce").fillna(0) > 0
+                    mask_nonempty |= normalize_animal_counts(out_to_save["nro_cab"]) > 0
                 used_rows = out_to_save[mask_nonempty]
                 if len(used_rows) > MAX_CORRALES:
                     st.error(f"Máximo permitido: {MAX_CORRALES} corrales. Estás intentando guardar {len(used_rows)}.")
@@ -3134,9 +3156,9 @@ with tab_mixer:
                     subset["kg_turno_asfed_calc"] = pd.to_numeric(
                         subset.get("kg_turno_asfed_calc", 0.0), errors="coerce"
                     ).fillna(0.0)
-                    subset["nro_cab"] = pd.to_numeric(
-                        subset.get("nro_cab", 0), errors="coerce"
-                    ).fillna(0).astype(int)
+                    subset["nro_cab"] = normalize_animal_counts(
+                        subset.get("nro_cab"), index=subset.index
+                    )
                     if "categ" in subset.columns:
                         subset["categ"] = (
                             subset["categ"]
@@ -3304,9 +3326,9 @@ with tab_mixer:
                     st.dataframe(corrales_show, use_container_width=True, hide_index=True)
 
                     subset_animals = subset.copy()
-                    subset_animals["nro_cab"] = pd.to_numeric(
-                        subset_animals.get("nro_cab", 0), errors="coerce"
-                    ).fillna(0).astype(int)
+                    subset_animals["nro_cab"] = normalize_animal_counts(
+                        subset_animals.get("nro_cab"), index=subset_animals.index
+                    )
                     subset_animals["categ"] = (
                         subset_animals.get("categ", "")
                         .astype(str)
