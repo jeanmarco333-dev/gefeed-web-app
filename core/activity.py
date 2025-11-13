@@ -19,7 +19,15 @@ def _log_path() -> Path:
 
 def _ensure_header(path: Path | None = None) -> Path:
     target = path or _log_path()
-    if not target.exists():
+    try:
+        exists = target.exists()
+    except OSError:
+        # Some environments raise OSError (e.g. permission issues) when checking
+        # for existence. Fall back to treating the file as missing so we can
+        # attempt to create it inside a writable directory.
+        exists = False
+        target.parent.mkdir(parents=True, exist_ok=True)
+    if not exists:
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle, delimiter="|")
