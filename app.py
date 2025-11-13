@@ -617,13 +617,42 @@ def load_base_cfg():
 
 def load_user_store():
     """Carga/crea el YAML editable de usuarios."""
-    if AUTH_STORE.exists():
-        try:
-            return yaml.safe_load(AUTH_STORE.read_text(encoding="utf-8")) or {}
-        except Exception:
-            pass
-    # Si no existe, inicializamos con estructura mínima
-    return {"credentials": {"usernames": {}}, "preauthorized": {"emails": []}}
+    empty_store = {"credentials": {"usernames": {}}, "preauthorized": {"emails": []}}
+
+    try:
+        raw_store = AUTH_STORE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return empty_store
+    except OSError as exc:
+        st.warning(
+            "No se pudo acceder al archivo editable de usuarios"
+            f" ({AUTH_STORE}). Se usará una configuración vacía. Detalle: {exc}"
+        )
+        return empty_store
+    except Exception as exc:
+        st.warning(
+            "Error inesperado al leer el archivo editable de usuarios."
+            f" Se usará una configuración vacía. Detalle: {exc}"
+        )
+        return empty_store
+
+    try:
+        store = yaml.safe_load(raw_store) or {}
+    except Exception as exc:
+        st.warning(
+            "El archivo editable de usuarios es inválido y se ignorará."
+            f" Se usará una configuración vacía. Detalle: {exc}"
+        )
+        return empty_store
+
+    if not isinstance(store, dict):
+        st.warning(
+            "El archivo editable de usuarios no contiene una estructura válida."
+            " Se usará una configuración vacía."
+        )
+        return empty_store
+
+    return store
 
 
 def merge_credentials(base_cfg, store_cfg):
@@ -4398,10 +4427,24 @@ if tab_admin is not None:
                 import bcrypt
 
                 def save_user_store(store_dict):
-                    AUTH_STORE.write_text(
-                        yaml.safe_dump(store_dict, allow_unicode=True, sort_keys=False),
-                        encoding="utf-8",
-                    )
+                    try:
+                        AUTH_STORE.write_text(
+                            yaml.safe_dump(store_dict, allow_unicode=True, sort_keys=False),
+                            encoding="utf-8",
+                        )
+                    except OSError as exc:
+                        st.error(
+                            "No se pudo guardar el archivo editable de usuarios."
+                            f" Verificá permisos de escritura. Detalle: {exc}"
+                        )
+                        return
+                    except Exception as exc:
+                        st.error(
+                            "Error inesperado al guardar el archivo editable de usuarios."
+                            f" Detalle: {exc}"
+                        )
+                        return
+
                     st.success("Cambios guardados.")
                     st.toast("Usuarios actualizados.", icon="✅")
                     st.rerun()
