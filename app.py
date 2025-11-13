@@ -1132,7 +1132,6 @@ MAX_UPLOAD_MB = 5
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 BASE_EXPECTED_COLUMNS = [
-    "tipo_racion",
     "nro_corral",
     "cod_racion",
     "nombre_racion",
@@ -1158,6 +1157,8 @@ BASE_PREVIEW_COLUMNS = [
     "turnos",
     "meta_salida",
 ]
+
+BASE_OPTIONAL_COLUMNS = ["tipo_racion"]
 
 
 def mark_changed(event: str, username: str):
@@ -1490,7 +1491,7 @@ if not RECIPES_PATH.exists():
     pd.DataFrame(columns=["id_racion","nombre_racion","ingrediente","pct_ms"]).to_csv(RECIPES_PATH, index=False, encoding="utf-8")
 if not BASE_PATH.exists():
     pd.DataFrame(columns=[
-        "tipo_racion","nro_corral","cod_racion","nombre_racion","categ",
+        "nro_corral","cod_racion","nombre_racion","categ",
         "PV_kg","CV_pct","AP_preten","nro_cab","mixer_id","capacidad_kg",
         "kg_turno","turnos","meta_salida"
     ]).to_csv(BASE_PATH, index=False, encoding="utf-8")
@@ -1800,19 +1801,13 @@ def validate_upload_size(uploaded_file, *, label: str) -> bool:
     return True
 
 # ------------------------------------------------------------------------------
-# IO helpers (cache)
+# IO helpers
 # ------------------------------------------------------------------------------
-def _cache_bust_key(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except Exception:
-        return 0.0
-
-
-@st.cache_data
-def _load_alimentos_cached(_cache_bust: float) -> pd.DataFrame:
+def load_alimentos() -> pd.DataFrame:
     try:
         df = pd.read_csv(ALIM_PATH, encoding="utf-8-sig")
+    except FileNotFoundError:
+        return pd.DataFrame(columns=ALIM_COLS)
     except Exception:
         df = pd.DataFrame(columns=ALIM_COLS)
     if df.shape[1] == 1:
@@ -1821,10 +1816,6 @@ def _load_alimentos_cached(_cache_bust: float) -> pd.DataFrame:
         except Exception:
             pass
     return _normalize_columns(df)
-
-
-def load_alimentos() -> pd.DataFrame:
-    return _load_alimentos_cached(_cache_bust_key(ALIM_PATH))
 
 def save_alimentos(df: pd.DataFrame):
     _normalize_columns(df.copy()).to_csv(ALIM_PATH, index=False, encoding="utf-8")
@@ -2350,16 +2341,17 @@ def build_raciones_from_recipes() -> list:
         })
 
     return raciones
-@st.cache_data
-def _load_base_cached(_cache_bust: float) -> pd.DataFrame:
-    try:
-        return pd.read_csv(BASE_PATH, encoding="utf-8-sig")
-    except Exception:
-        return pd.DataFrame()
-
-
 def load_base() -> pd.DataFrame:
-    return _load_base_cached(_cache_bust_key(BASE_PATH))
+    try:
+        df = pd.read_csv(BASE_PATH, encoding="utf-8-sig")
+    except FileNotFoundError:
+        return pd.DataFrame(columns=BASE_EXPECTED_COLUMNS)
+    except Exception:
+        return pd.DataFrame(columns=BASE_EXPECTED_COLUMNS)
+    drop_cols = [col for col in BASE_OPTIONAL_COLUMNS if col in df.columns]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+    return df
 
 
 def normalize_animal_counts(
@@ -2402,7 +2394,12 @@ def normalize_animal_counts(
 
 
 def save_base(df: pd.DataFrame):
-    df.to_csv(BASE_PATH, index=False, encoding="utf-8")
+    out = df.copy()
+    for col in BASE_EXPECTED_COLUMNS:
+        if col not in out.columns:
+            out[col] = pd.NA
+    out = out[[col for col in BASE_EXPECTED_COLUMNS if col in out.columns]]
+    out.to_csv(BASE_PATH, index=False, encoding="utf-8")
     success = backup_user_file(BASE_PATH, "Actualizar base de corrales")
     audit_log_append(
         "save_base",
@@ -2763,11 +2760,14 @@ with tab_corrales:
                             meta={"duplicated": duplicated},
                         )
                     else:
+                        allowed_extra = set(BASE_OPTIONAL_COLUMNS)
                         missing = [
                             col for col in BASE_EXPECTED_COLUMNS if col not in imported_df.columns
                         ]
                         extra = [
-                            col for col in imported_df.columns if col not in BASE_EXPECTED_COLUMNS
+                            col
+                            for col in imported_df.columns
+                            if col not in BASE_EXPECTED_COLUMNS and col not in allowed_extra
                         ]
                         if missing or extra:
                             message = "⚠️ El archivo no coincide con la estructura esperada."
