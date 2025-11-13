@@ -81,6 +81,14 @@ GLOBAL_DATA_DIR = _ensure_writable_dir(Path(DATA_DIR_ENV) if DATA_DIR_ENV else P
 os.environ.setdefault("DATA_DIR", str(GLOBAL_DATA_DIR))
 os.environ.setdefault("BACKUP_DIR", str(GLOBAL_DATA_DIR / "backups"))
 
+from core.wizard import (  # noqa: E402  # Imported after DATA_DIR is configured
+    delete_draft,
+    ensure_draft_id,
+    guardar_registro_definitivo,
+    load_step_data,
+    save_step_data,
+)
+
 # --- Config de ADMIN y almacenamiento de usuarios editables ---
 DEFAULT_ADMIN_USERS = {"admin"}  # usuarios que verán la pestaña de administración por defecto
 
@@ -3424,9 +3432,337 @@ with tab_alimentos:
             rerun_with_cache_reset()
 
 # ------------------------------------------------------------------------------
+# Mixer wizard helpers
+# ------------------------------------------------------------------------------
+WIZARD_STEPS = ["datos_basicos", "raciones", "mixer", "corrales", "resumen"]
+WIZARD_STATE_KEYS = ["draft_id", "wizard_step", *WIZARD_STEPS]
+
+
+def get_step_index() -> int:
+    return int(st.session_state.get("wizard_step", 0))
+
+
+def set_step_index(i: int) -> None:
+    st.session_state["wizard_step"] = int(max(0, min(i, len(WIZARD_STEPS) - 1)))
+
+
+def go_next() -> None:
+    set_step_index(get_step_index() + 1)
+
+
+def go_prev() -> None:
+    set_step_index(get_step_index() - 1)
+
+
+def _parse_saved_date(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+    return datetime.today().date()
+
+
+def reset_wizard_state() -> None:
+    for key in WIZARD_STATE_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _load_existing_payload(step_name: str) -> dict[str, Any]:
+    draft_id = ensure_draft_id()
+    payload = st.session_state.get(step_name)
+    if not payload:
+        payload = load_step_data(draft_id, step_name) or {}
+        if payload:
+            st.session_state[step_name] = payload
+    return payload or {}
+
+
+def step_datos_basicos() -> None:
+    draft_id = ensure_draft_id()
+    existing = _load_existing_payload("datos_basicos")
+
+    st.subheader("Paso 1 de 5 — Datos básicos de la carga")
+
+    fecha_valor = _parse_saved_date(existing.get("fecha"))
+
+    with st.form("form_datos_basicos"):
+        nombre_carga = st.text_input(
+            "Nombre o código de carga",
+            value=existing.get("nombre_carga", ""),
+        )
+        fecha = st.date_input(
+            "Fecha",
+            value=fecha_valor,
+        )
+        observaciones = st.text_area(
+            "Observaciones",
+            value=existing.get("observaciones", ""),
+        )
+
+        col1, col2 = st.columns([1, 1])
+        btn_guardar = col1.form_submit_button("💾 Guardar y continuar", type="primary")
+        col2.form_submit_button("⬅️ Volver", disabled=True)
+
+    if btn_guardar:
+        if not nombre_carga.strip():
+            st.error("Ingresá un nombre o código para la carga.")
+            return
+
+        payload = {
+            "nombre_carga": nombre_carga.strip(),
+            "fecha": str(fecha),
+            "observaciones": observaciones.strip(),
+        }
+        st.session_state["datos_basicos"] = payload
+        save_step_data(draft_id, "datos_basicos", payload)
+        go_next()
+        st.rerun()
+
+
+def step_raciones() -> None:
+    draft_id = ensure_draft_id()
+    existing = _load_existing_payload("raciones")
+
+    st.subheader("Paso 2 de 5 — Configuración de raciones")
+
+    with st.form("form_raciones"):
+        racion_base = st.text_input(
+            "Ración base",
+            value=existing.get("racion_base", ""),
+            help="Nombre de la ración que se utilizará como base de la carga.",
+        )
+        porcentaje_ms = st.number_input(
+            "% MS estimado",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(existing.get("porcentaje_ms", 0.0)),
+            step=0.1,
+        )
+        consumo_objetivo = st.number_input(
+            "Consumo objetivo (kg/cab/día)",
+            min_value=0.0,
+            value=float(existing.get("consumo_objetivo", 0.0)),
+            step=0.1,
+        )
+        notas = st.text_area(
+            "Observaciones de la ración",
+            value=existing.get("notas", ""),
+        )
+
+        col1, col2 = st.columns([1, 1])
+        btn_guardar = col1.form_submit_button("💾 Guardar y continuar", type="primary")
+        btn_volver = col2.form_submit_button("⬅️ Volver")
+
+    if btn_volver:
+        go_prev()
+        st.rerun()
+
+    if btn_guardar:
+        if not racion_base.strip():
+            st.error("Seleccioná o ingresá una ración base.")
+            return
+
+        payload = {
+            "racion_base": racion_base.strip(),
+            "porcentaje_ms": porcentaje_ms,
+            "consumo_objetivo": consumo_objetivo,
+            "notas": notas.strip(),
+        }
+        st.session_state["raciones"] = payload
+        save_step_data(draft_id, "raciones", payload)
+        go_next()
+        st.rerun()
+
+
+def step_mixer() -> None:
+    draft_id = ensure_draft_id()
+    existing = _load_existing_payload("mixer")
+
+    st.subheader("Paso 3 de 5 — Mixer y carga total")
+
+    mixers_df = load_mixers()
+    mixer_options = [""]
+    if not mixers_df.empty:
+        mixer_options.extend(sorted(mixers_df["mixer_id"].dropna().astype(str)))
+    selected_mixer = str(existing.get("mixer_sel", ""))
+    selected_index = mixer_options.index(selected_mixer) if selected_mixer in mixer_options else 0
+
+    with st.form("form_mixer"):
+        mixer_sel = st.selectbox(
+            "Mixer",
+            options=mixer_options,
+            index=selected_index,
+        )
+        capacidad = st.number_input(
+            "Capacidad del mixer (kg)",
+            min_value=0.0,
+            value=float(existing.get("capacidad", 0.0)),
+            step=10.0,
+        )
+        kilos_cargar = st.number_input(
+            "Kilos totales a cargar",
+            min_value=0.0,
+            value=float(existing.get("kilos_cargar", 0.0)),
+            step=10.0,
+        )
+        vueltas = st.number_input(
+            "Número de vueltas",
+            min_value=1,
+            value=int(existing.get("vueltas", 1) or 1),
+            step=1,
+        )
+        notas = st.text_area(
+            "Observaciones del mixer",
+            value=existing.get("notas", ""),
+        )
+
+        col1, col2 = st.columns([1, 1])
+        btn_guardar = col1.form_submit_button("💾 Guardar y continuar", type="primary")
+        btn_volver = col2.form_submit_button("⬅️ Volver")
+
+    if btn_volver:
+        go_prev()
+        st.rerun()
+
+    if btn_guardar:
+        if not mixer_sel:
+            st.error("Elegí un mixer para continuar.")
+            return
+        if capacidad <= 0:
+            st.error("Ingresá la capacidad del mixer en kilogramos.")
+            return
+
+        payload = {
+            "mixer_sel": mixer_sel,
+            "capacidad": capacidad,
+            "kilos_cargar": kilos_cargar,
+            "vueltas": vueltas,
+            "notas": notas.strip(),
+        }
+        st.session_state["mixer"] = payload
+        save_step_data(draft_id, "mixer", payload)
+        go_next()
+        st.rerun()
+
+
+def step_corrales() -> None:
+    draft_id = ensure_draft_id()
+    existing = _load_existing_payload("corrales")
+
+    st.subheader("Paso 4 de 5 — Distribución por corrales")
+
+    with st.form("form_corrales"):
+        descripcion = st.text_area(
+            "Detalle de distribución",
+            value=existing.get("descripcion", ""),
+            help="Anotá cómo se reparte la carga entre corrales o categorías.",
+        )
+        total_corrales = st.number_input(
+            "Cantidad de corrales a abastecer",
+            min_value=0,
+            value=int(existing.get("total_corrales", 0)),
+            step=1,
+        )
+        kilos_totales = st.number_input(
+            "Kilos totales distribuidos",
+            min_value=0.0,
+            value=float(existing.get("kilos_totales", 0.0)),
+            step=10.0,
+        )
+
+        col1, col2 = st.columns([1, 1])
+        btn_guardar = col1.form_submit_button("💾 Guardar y continuar", type="primary")
+        btn_volver = col2.form_submit_button("⬅️ Volver")
+
+    if btn_volver:
+        go_prev()
+        st.rerun()
+
+    if btn_guardar:
+        if total_corrales <= 0:
+            st.error("Indicá al menos un corral para la distribución.")
+            return
+
+        payload = {
+            "descripcion": descripcion.strip(),
+            "total_corrales": total_corrales,
+            "kilos_totales": kilos_totales,
+        }
+        st.session_state["corrales"] = payload
+        save_step_data(draft_id, "corrales", payload)
+        go_next()
+        st.rerun()
+
+
+def step_resumen() -> None:
+    draft_id = ensure_draft_id()
+
+    datos_basicos = st.session_state.get("datos_basicos") or load_step_data(draft_id, "datos_basicos")
+    raciones = st.session_state.get("raciones") or load_step_data(draft_id, "raciones")
+    mixer_info = st.session_state.get("mixer") or load_step_data(draft_id, "mixer")
+    corrales = st.session_state.get("corrales") or load_step_data(draft_id, "corrales")
+
+    st.subheader("Paso 5 de 5 — Resumen y confirmación")
+
+    st.write("### Datos básicos")
+    st.json(datos_basicos)
+    st.write("### Raciones")
+    st.json(raciones)
+    st.write("### Mixer")
+    st.json(mixer_info)
+    st.write("### Corrales")
+    st.json(corrales)
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+
+    if col1.button("⬅️ Volver"):
+        go_prev()
+        st.rerun()
+
+    if col3.button("✅ Confirmar y guardar definitivo", type="primary"):
+        registro_final = {
+            "draft_id": draft_id,
+            "datos_basicos": datos_basicos,
+            "raciones": raciones,
+            "mixer": mixer_info,
+            "corrales": corrales,
+            "confirmado_en": datetime.now().isoformat(),
+        }
+        guardar_registro_definitivo(registro_final)
+        delete_draft(draft_id)
+        st.success("Carga registrada correctamente.")
+        reset_wizard_state()
+        st.rerun()
+
+
+def run_mixer_wizard() -> None:
+    ensure_draft_id()
+    step_name = WIZARD_STEPS[get_step_index()]
+
+    if step_name == "datos_basicos":
+        step_datos_basicos()
+    elif step_name == "raciones":
+        step_raciones()
+    elif step_name == "mixer":
+        step_mixer()
+    elif step_name == "corrales":
+        step_corrales()
+    elif step_name == "resumen":
+        step_resumen()
+
+
+# ------------------------------------------------------------------------------
 # 🧮 Mixer
 # ------------------------------------------------------------------------------
 with tab_mixer:
+    with card("JM P-Feedlot v0.26 — Carga de ración (Wizard)", "Carga guiada paso a paso"):
+        st.caption("🚧 Versión beta: guardá la carga paso a paso. Podés cerrar y volver, se recuperan los borradores.")
+        run_mixer_wizard()
+
     with card("🧮 Cálculo de descarga de mixer (as-fed)", "Plan diario por tipo de ración"):
         st.markdown("### Planificación integral del mixer")
 
