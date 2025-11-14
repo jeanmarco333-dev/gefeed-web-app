@@ -2807,32 +2807,56 @@ if USER_IS_ADMIN and admin_tabs:
                 st.subheader("Actividad reciente")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Eventos", len(activity_df))
-                c2.metric(
-                    "Simulaciones",
-                    int((activity_df["accion"] == "simulacion").sum()),
-                )
-                c3.metric("Ediciones", int((activity_df["accion"] == "edicion").sum()))
-                c4.metric(
-                    "Exportaciones",
-                    int((activity_df["accion"] == "exportacion").sum()),
-                )
+
+                accion_series = activity_df.get("accion")
+                if accion_series is None:
+                    st.warning(
+                        "El archivo activity_log.csv no contiene la columna 'accion'."
+                    )
+                    simulaciones = ediciones = exportaciones = 0
+                else:
+                    accion_series = accion_series.astype(str)
+                    simulaciones = int((accion_series == "simulacion").sum())
+                    ediciones = int((accion_series == "edicion").sum())
+                    exportaciones = int((accion_series == "exportacion").sum())
+
+                c2.metric("Simulaciones", simulaciones)
+                c3.metric("Ediciones", ediciones)
+                c4.metric("Exportaciones", exportaciones)
 
                 last_df = activity_df.tail(20).iloc[::-1]
                 st.dataframe(last_df, use_container_width=True, hide_index=True)
 
                 with st.expander("Filtros"):
                     filt_df = activity_df.copy()
-                    acciones = sorted(
-                        filt_df["accion"].dropna().astype(str).unique().tolist()
-                    )
-                    operadores = sorted(
-                        filt_df["op"].dropna().astype(str).unique().tolist()
-                    )
+
+                    acciones = []
+                    if "accion" in filt_df.columns:
+                        acciones = (
+                            filt_df["accion"].dropna().astype(str).unique().tolist()
+                        )
+                        acciones.sort()
+                    else:
+                        st.info(
+                            "No se puede filtrar por acciones porque falta la columna 'accion'."
+                        )
+
+                    operadores = []
+                    if "op" in filt_df.columns:
+                        operadores = (
+                            filt_df["op"].dropna().astype(str).unique().tolist()
+                        )
+                        operadores.sort()
+                    else:
+                        st.info(
+                            "No se puede filtrar por operadores porque falta la columna 'op'."
+                        )
+
                     sel_acc = st.multiselect("Acciones", acciones)
                     sel_ops = st.multiselect("Operadores", operadores)
-                    if sel_acc:
+                    if sel_acc and "accion" in filt_df.columns:
                         filt_df = filt_df[filt_df["accion"].isin(sel_acc)]
-                    if sel_ops:
+                    if sel_ops and "op" in filt_df.columns:
                         filt_df = filt_df[filt_df["op"].isin(sel_ops)]
                     st.dataframe(
                         filt_df.tail(200).iloc[::-1],
