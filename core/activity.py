@@ -57,6 +57,22 @@ def get_log_path(ensure: bool = True) -> Path:
 
         return log_path
 
+    # As a last resort, try to create a brand-new temporary directory so the
+    # application can keep running even if the usual locations are not
+    # available (for instance when an existing ``gefeed-logs`` directory has
+    # restrictive permissions).
+    try:
+        fallback_dir = Path(tempfile.mkdtemp(prefix="gefeed-logs-"))
+        fallback_path = fallback_dir / LOG_FILENAME
+
+        if ensure and not fallback_path.exists():
+            with open(fallback_path, "w", encoding="utf-8") as handle:
+                handle.write(HEADER)
+
+        return fallback_path
+    except OSError as exc:  # pragma: no cover - extremely unlikely
+        last_err = exc
+
     raise RuntimeError(
         "No se pudo crear / usar activity.log en ningún directorio candidato. "
         f"Último error: {last_err}"
