@@ -7,8 +7,10 @@ import tempfile
 import uuid
 from typing import Iterable
 
-LOG_FILENAME = "activity.log"
-HEADER = "timestamp,level,scope,message\n"
+LOG_FILENAME = "activity_log.csv"
+PIPE = "|"
+COLUMNS = ("timestamp", "level", "scope", "op", "accion", "detalle", "trace")
+HEADER = PIPE.join(COLUMNS) + "\n"
 
 
 def _candidate_log_dirs() -> Iterable[Path]:
@@ -28,7 +30,7 @@ def _candidate_log_dirs() -> Iterable[Path]:
 
 
 def get_log_path(ensure: bool = True) -> Path:
-    """Return the path to ``activity.log`` in a writable directory."""
+    """Return the path to ``activity_log.csv`` in a writable directory."""
 
     last_err: OSError | None = None
 
@@ -74,9 +76,13 @@ def get_log_path(ensure: bool = True) -> Path:
         last_err = exc
 
     raise RuntimeError(
-        "No se pudo crear / usar activity.log en ningún directorio candidato. "
+        "No se pudo crear / usar activity_log.csv en ningún directorio candidato. "
         f"Último error: {last_err}"
     )
+
+
+def _sanitize(value: str) -> str:
+    return value.replace(PIPE, "/").replace("\n", " ").strip()
 
 
 def append_log(message: str, level: str = "INFO", scope: str = "app") -> None:
@@ -87,8 +93,42 @@ def append_log(message: str, level: str = "INFO", scope: str = "app") -> None:
     except Exception:
         return
 
-    safe_message = message.replace(",", ";")
-    line = f"{datetime.utcnow().isoformat()}Z,{level},{scope},{safe_message}\n"
+    timestamp = f"{datetime.utcnow().isoformat()}Z"
+
+    if scope == "activity":
+        payload = {column: "" for column in COLUMNS}
+        payload["timestamp"] = timestamp
+        payload["level"] = level
+        payload["scope"] = scope
+
+        for raw_part in message.split("|"):
+            part = raw_part.strip()
+            if not part:
+                continue
+
+            if "=" in part:
+                key, value = part.split("=", 1)
+                key = key.strip()
+                value = _sanitize(value)
+                if key in payload:
+                    payload[key] = value
+                elif key == "message" and not payload["detalle"]:
+                    payload["detalle"] = value
+            elif not payload["detalle"]:
+                payload["detalle"] = _sanitize(part)
+
+        line = PIPE.join(payload[column] for column in COLUMNS) + "\n"
+    else:
+        safe_message = _sanitize(message)
+        line = PIPE.join([
+            timestamp,
+            level,
+            scope,
+            "",
+            "",
+            safe_message,
+            "",
+        ]) + "\n"
 
     try:
         with open(path, "a", encoding="utf-8") as handle:
