@@ -107,9 +107,16 @@ def _clear_auth_state() -> None:
         st.session_state.pop(key, None)
 
 
+def _trigger_rerun() -> None:
+    rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun is None:
+        raise RuntimeError("Streamlit rerun function is not available")
+    rerun()
+
+
 def _logout_user() -> None:
     _clear_auth_state()
-    st.experimental_rerun()
+    _trigger_rerun()
 
 
 def _verify_password(plain_password: str, stored_hash: str | None) -> bool:
@@ -812,7 +819,7 @@ else:
             st.session_state[SESSION_AUTH_USER] = input_username
             st.session_state[SESSION_AUTH_NAME] = resolved_name
             st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
-            st.experimental_rerun()
+            _trigger_rerun()
         else:
             st.session_state[SESSION_AUTH_STATUS] = False
             st.error("Usuario o contraseña inválidos")
