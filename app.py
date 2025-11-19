@@ -29,6 +29,7 @@ import streamlit as st
 
 from core.activity import append_log, get_log_path, new_trace
 from core.backup import backup_flow
+from core.numbers import normalize_animal_counts
 
 from calc_engine import (
     Food,
@@ -2481,45 +2482,6 @@ def load_base() -> pd.DataFrame:
             pd.to_numeric(df["nro_cab"], errors="coerce").fillna(0).astype(int)
         )
     return df
-
-
-def normalize_animal_counts(
-    series: pd.Series | Any, *, index: pd.Index | None = None
-) -> pd.Series:
-    """Return a rounded integer series from arbitrary user inputs.
-
-    Los usuarios pueden ingresar números con separadores de miles en formato
-    español (puntos) o inglés (comas), e incluso con espacios. Esta función
-    limpia esos caracteres y convierte el resultado en enteros, asegurando que
-    los totales de animales se calculen correctamente.
-    """
-
-    if series is None:
-        if index is not None:
-            return pd.Series(0, index=index, dtype=int)
-        return pd.Series(dtype=int)
-
-    if isinstance(series, pd.Series):
-        if index is None:
-            index = series.index
-        work = series.astype(str).str.strip()
-    else:
-        if index is None and hasattr(series, "index"):
-            index = series.index  # type: ignore[attr-defined]
-        series = pd.Series(series, index=index)
-        work = series.astype(str).str.strip()
-
-    if work.empty:
-        if index is not None:
-            return pd.Series(0, index=index, dtype=int)
-        return pd.Series(dtype=int)
-
-    work = work.str.replace(r"\s+", "", regex=True)
-    work = work.str.replace(r"[.,\u00A0\u202F](?=\d{3}(?:\D|$))", "", regex=True)
-    work = work.str.replace(",", ".", regex=False)
-
-    numeric = pd.to_numeric(work, errors="coerce").fillna(0.0)
-    return numeric.round().astype(int)
 
 
 def save_base(df: pd.DataFrame):
