@@ -19,3 +19,9 @@ def test_normalize_handles_apostrophes_and_thousand_separators():
 def test_normalize_returns_zero_series_for_none_input():
     out = normalize_animal_counts(None, index=pd.RangeIndex(0, 3))
     assert out.tolist() == [0, 0, 0]
+
+
+def test_normalize_discards_trailing_labels_and_signs():
+    raw = pd.Series(["1.250 hd", "+2.500 cabezas", "- 350 terneros", "invalid"])
+    result = normalize_animal_counts(raw)
+    assert result.tolist() == [1250, 2500, -350, 0]
