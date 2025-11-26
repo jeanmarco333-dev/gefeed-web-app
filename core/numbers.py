@@ -46,6 +46,10 @@ def normalize_animal_counts(
             return pd.Series(0, index=index, dtype=int)
         return pd.Series(dtype=int)
 
+    work = work.str.extract(
+        r"([-+]?[\d.,\s\'\u2018\u2019\u00A0\u202F]+)", expand=False
+    ).fillna("")
+
     work = work.str.replace(THIN_SPACE_PATTERN, "", regex=True)
     work = work.str.replace(APOSTROPHE_PATTERN, "", regex=True)
     work = work.str.replace(THOUSANDS_PATTERN, "", regex=True)
