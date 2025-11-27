@@ -1268,6 +1268,8 @@ BASE_EXPECTED_COLUMNS = [
     "meta_salida",
 ]
 
+SESSION_BASE_KEY = "corrales_base_df"
+
 BASE_PREVIEW_COLUMNS = [
     "nro_corral",
     "nombre_racion",
@@ -1454,7 +1456,7 @@ def build_methodology_doc() -> tuple[str, dict]:
     alim = load_alimentos()
     rec = load_recipes()
     cat = load_catalog()
-    base = load_base()
+    base = get_corrales_base()
     reqE = load_reqener()
     reqP = load_reqprot()
 
@@ -1631,6 +1633,7 @@ def clear_streamlit_cache():
 
 def rerun_with_cache_reset():
     clear_streamlit_cache()
+    st.session_state.pop(SESSION_BASE_KEY, None)
     st.rerun()
 
 # ------------------------------------------------------------------------------
@@ -2484,6 +2487,26 @@ def load_base() -> pd.DataFrame:
     return df
 
 
+def get_corrales_base() -> pd.DataFrame:
+    if not hasattr(st, "session_state"):
+        return load_base()
+
+    cached = st.session_state.get(SESSION_BASE_KEY)
+    if isinstance(cached, pd.DataFrame):
+        return cached.copy()
+
+    df = load_base()
+    st.session_state[SESSION_BASE_KEY] = df.copy()
+    return st.session_state[SESSION_BASE_KEY].copy()
+
+
+def set_corrales_base(df: pd.DataFrame) -> None:
+    if not hasattr(st, "session_state"):
+        return
+
+    st.session_state[SESSION_BASE_KEY] = df.copy()
+
+
 def save_base(df: pd.DataFrame):
     out = df.copy()
     for col in BASE_EXPECTED_COLUMNS:
@@ -2697,7 +2720,7 @@ with tab_home:
         "last_update": None,
     }
 
-    base_df = load_base()
+    base_df = get_corrales_base()
     total_animales = 0
     va = 0
     nov = 0
@@ -2845,7 +2868,7 @@ with tab_corrales:
     with card("📊 Stock, categorías y corrales", "Actualizá ración, categoría, cabezas y mezcla asignada por corral."):
         cat_df = load_catalog()
         mix_df = load_mixers()
-        base = load_base()
+        base = get_corrales_base()
 
         etapas_series = cat_df.get("etapa", pd.Series(dtype=str))
         tipos = (
@@ -2987,6 +3010,7 @@ with tab_corrales:
                                 )
 
                             save_base(ordered_df)
+                            set_corrales_base(ordered_df)
                             st.success(
                                 "✅ Corrales actualizados correctamente. Se recargará la vista."
                             )
@@ -3249,6 +3273,7 @@ with tab_corrales:
                     )
                 else:
                     save_base(out_to_save)
+                    set_corrales_base(out_to_save)
                     st.success("Base guardada.")
                     st.toast("Base actualizada.", icon="📦")
                     rerun_with_cache_reset()
@@ -3773,7 +3798,7 @@ with tab_mixer:
 
         fecha_plan = st.date_input("Fecha", datetime.today().date(), key="mixer_plan_fecha")
 
-        base_df = load_base()
+        base_df = get_corrales_base()
         mixers_df = load_mixers()
         raciones_recetas = build_raciones_from_recipes()
         plan_exports: list[pd.DataFrame] = []
@@ -5076,7 +5101,7 @@ with tab_raciones:
                 if not vals.empty:
                     cv_catalog = float(vals.iloc[0])
 
-            corrales_df = load_base()
+            corrales_df = get_corrales_base()
             corral_choices = ["(sin corral)"]
             corral_lookup: dict[str, pd.Series | None] = {"(sin corral)": None}
             if not corrales_df.empty:
