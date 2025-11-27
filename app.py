@@ -3011,22 +3011,15 @@ with tab_corrales:
                 .str.strip()
             )
             total_animales = int(base_animals["nro_cab"].sum())
-            va_total = int(
-                base_animals.loc[
-                    base_animals["categ_norm"].str.contains(
-                        "vaq", case=False, na=False
-                    ),
-                    "nro_cab",
-                ].sum()
+            va_mask = base_animals["categ_norm"].str.startswith(
+                ("vaq", "va", "vaca"), na=False
             )
-            nov_total = int(
-                base_animals.loc[
-                    base_animals["categ_norm"].str.contains(
-                        "nov", case=False, na=False
-                    ),
-                    "nro_cab",
-                ].sum()
+            va_total = int(base_animals.loc[va_mask, "nro_cab"].sum())
+
+            nov_mask = base_animals["categ_norm"].str.contains(
+                "nov", case=False, na=False
             )
+            nov_total = int(base_animals.loc[nov_mask, "nro_cab"].sum())
         else:
             total_animales = va_total = nov_total = 0
 
