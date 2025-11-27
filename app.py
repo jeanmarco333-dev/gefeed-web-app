@@ -3010,16 +3010,30 @@ with tab_corrales:
                 .str.lower()
                 .str.strip()
             )
-            total_animales = int(base_animals["nro_cab"].sum())
+
+            has_corral = (
+                pd.Series(False, index=base_animals.index)
+                if "nro_corral" not in base_animals
+                else base_animals["nro_corral"].notna()
+            )
+            has_ration = (
+                pd.Series(False, index=base_animals.index)
+                if "nombre_racion" not in base_animals
+                else base_animals["nombre_racion"].astype(str).str.strip() != ""
+            )
+            active_mask = (base_animals["nro_cab"] > 0) | has_corral | has_ration
+            base_animals = base_animals.loc[active_mask]
+
+            total_animales = int(base_animals["nro_cab"].sum()) if not base_animals.empty else 0
             va_mask = base_animals["categ_norm"].str.startswith(
                 ("vaq", "va", "vaca"), na=False
             )
-            va_total = int(base_animals.loc[va_mask, "nro_cab"].sum())
+            va_total = int(base_animals.loc[va_mask, "nro_cab"].sum()) if not base_animals.empty else 0
 
             nov_mask = base_animals["categ_norm"].str.contains(
                 "nov", case=False, na=False
             )
-            nov_total = int(base_animals.loc[nov_mask, "nro_cab"].sum())
+            nov_total = int(base_animals.loc[nov_mask, "nro_cab"].sum()) if not base_animals.empty else 0
         else:
             total_animales = va_total = nov_total = 0
 
@@ -3027,6 +3041,11 @@ with tab_corrales:
         mc1.metric("Total animales", f"{total_animales:,}")
         mc2.metric("Vaquillonas", f"{va_total:,}")
         mc3.metric("Novillos", f"{nov_total:,}")
+
+        if base_animals.empty:
+            st.info(
+                "No hay corrales con cabezas cargadas o ración asignada. Completá la base para ver los totales."
+            )
 
         stock_checks: dict[str, int] = {}
         stock_preview = base_animals.copy()
