@@ -2491,6 +2491,7 @@ def save_base(df: pd.DataFrame):
             out[col] = pd.NA
     out = out[[col for col in BASE_EXPECTED_COLUMNS if col in out.columns]]
     if "nro_cab" in out.columns:
+        out["nro_cab"] = normalize_animal_counts(out["nro_cab"], index=out.index)
         out["nro_cab"] = (
             pd.to_numeric(out["nro_cab"], errors="coerce").fillna(0).astype(int)
         )
