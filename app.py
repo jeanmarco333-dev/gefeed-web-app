@@ -1631,9 +1631,10 @@ def clear_streamlit_cache():
     except Exception:
         pass
 
-def rerun_with_cache_reset():
+def rerun_with_cache_reset(*, drop_corrales: bool = True):
     clear_streamlit_cache()
-    st.session_state.pop(SESSION_BASE_KEY, None)
+    if drop_corrales:
+        st.session_state.pop(SESSION_BASE_KEY, None)
     st.rerun()
 
 # ------------------------------------------------------------------------------
@@ -2463,6 +2464,8 @@ def build_raciones_from_recipes() -> list:
         })
 
     return raciones
+
+
 def load_base() -> pd.DataFrame:
     try:
         df = pd.read_csv(BASE_PATH, encoding="utf-8-sig")
@@ -2500,6 +2503,14 @@ def get_corrales_base() -> pd.DataFrame:
     return st.session_state[SESSION_BASE_KEY].copy()
 
 
+def reload_corrales_base() -> pd.DataFrame:
+    """Reload corrales base from CSV and store it in session_state."""
+
+    df = load_base()
+    set_corrales_base(df)
+    return df.copy()
+
+
 def set_corrales_base(df: pd.DataFrame) -> None:
     if not hasattr(st, "session_state"):
         return
@@ -2517,6 +2528,7 @@ def save_base(df: pd.DataFrame):
         out["nro_cab"] = (
             pd.to_numeric(out["nro_cab"], errors="coerce").fillna(0).astype(int)
         )
+    set_corrales_base(out)
     out.to_csv(BASE_PATH, index=False, encoding="utf-8")
     success = backup_user_file(BASE_PATH, "Actualizar base de corrales")
     audit_log_append(
@@ -3010,12 +3022,11 @@ with tab_corrales:
                                 )
 
                             save_base(ordered_df)
-                            set_corrales_base(ordered_df)
                             st.success(
                                 "✅ Corrales actualizados correctamente. Se recargará la vista."
                             )
                             st.toast("Corrales actualizados desde CSV.", icon="📥")
-                            rerun_with_cache_reset()
+                            rerun_with_cache_reset(drop_corrales=False)
 
         enriched = enrich_and_calc_base(base)
         base_animals = enriched.copy()
@@ -3273,12 +3284,16 @@ with tab_corrales:
                     )
                 else:
                     save_base(out_to_save)
-                    set_corrales_base(out_to_save)
                     st.success("Base guardada.")
                     st.toast("Base actualizada.", icon="📦")
-                    rerun_with_cache_reset()
+                    rerun_with_cache_reset(drop_corrales=False)
             if refresh:
-                rerun_with_cache_reset()
+                refreshed = reload_corrales_base()
+                st.toast(
+                    f"Recargaste {len(refreshed)} filas desde CSV.",
+                    icon="🔄",
+                )
+                rerun_with_cache_reset(drop_corrales=False)
 
 # ------------------------------------------------------------------------------
 # 📦 Alimentos
