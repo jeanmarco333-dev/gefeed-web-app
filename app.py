@@ -1453,7 +1453,7 @@ def save_mixer_simulation_snapshot(
 def build_methodology_doc() -> tuple[str, dict]:
     """Genera el markdown de metodología y los metadatos de auditoría."""
 
-    alim = load_alimentos()
+    alim = get_alimentos_state()
     rec = load_recipes()
     cat = load_catalog()
     base = get_corrales_base()
@@ -1940,6 +1940,27 @@ def load_alimentos() -> pd.DataFrame:
             pass
     return _normalize_columns(df)
 
+
+def _init_alimentos_state() -> pd.DataFrame:
+    if "df_alimentos" not in st.session_state:
+        st.session_state["df_alimentos"] = load_alimentos().copy()
+    return st.session_state["df_alimentos"]
+
+
+def get_alimentos_state() -> pd.DataFrame:
+    return _init_alimentos_state().copy()
+
+
+def reload_alimentos_state() -> pd.DataFrame:
+    st.session_state["df_alimentos"] = load_alimentos().copy()
+    return st.session_state["df_alimentos"]
+
+
+def save_alimentos_state(df: pd.DataFrame) -> None:
+    save_alimentos(df)
+    st.session_state["df_alimentos"] = df.copy()
+
+
 def save_alimentos(df: pd.DataFrame):
     _normalize_columns(df.copy()).to_csv(ALIM_PATH, index=False, encoding="utf-8")
     success = backup_user_file(ALIM_PATH, "Actualizar catálogo de alimentos")
@@ -2154,7 +2175,7 @@ def sync_food_costs_from_api(api_url: str) -> tuple[bool, str, int]:
     if not items:
         return False, "La API no devolvió alimentos para actualizar.", 0
 
-    alim_df = load_alimentos().copy()
+    alim_df = get_alimentos_state()
     if alim_df.empty:
         alim_df = pd.DataFrame(columns=ALIM_COLS)
 
@@ -2187,7 +2208,7 @@ def sync_food_costs_from_api(api_url: str) -> tuple[bool, str, int]:
         return False, "No se encontraron alimentos coincidentes para actualizar.", 0
 
     alim_df = alim_df.drop(columns=["_origen_lower"])
-    save_alimentos(alim_df)
+    save_alimentos_state(alim_df)
     return True, f"Actualizados {updates} precios desde Compras/Stock.", updates
 
 @st.cache_data
@@ -2395,7 +2416,7 @@ def build_raciones_from_recipes() -> list:
     if cat.empty or rec.empty:
         return []
 
-    alimentos = load_alimentos()
+    alimentos = get_alimentos_state()
     if alimentos.empty:
         return []
 
@@ -2665,7 +2686,7 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
     df["kg_turno"] = df["kg_turno_calc"]
 
     recipes = load_recipes()
-    alimentos = load_alimentos()[["ORIGEN", "MS"]]
+    alimentos = get_alimentos_state()[["ORIGEN", "MS"]]
     ms_map: dict[str, float] = {}
     for nombre in df["nombre_racion"].dropna().unique():
         sub = recipes[recipes["nombre_racion"] == nombre]
@@ -3302,9 +3323,10 @@ with tab_alimentos:
     with card("📦 Catálogo de alimentos", "MS/COEF/Precio editables — EM/PB fijos — máx. 30 filas"):
         col_fr, _ = st.columns([1, 1])
         if col_fr.button("🔄 Forzar recarga de catálogo"):
+            reload_alimentos_state()
             rerun_with_cache_reset()
 
-        alimentos_df = load_alimentos().copy()
+        alimentos_df = get_alimentos_state()
 
         with dropdown("📥 Importar planilla de alimentos"):
             st.markdown("Descargá la plantilla base, completala y luego importala en formato CSV o Excel.")
@@ -3387,7 +3409,7 @@ with tab_alimentos:
                             if len(df_norm) > 30:
                                 st.error("El catálogo admite máximo 30 alimentos. Ajustá el archivo antes de importar.")
                             else:
-                                save_alimentos(df_norm)
+                                save_alimentos_state(df_norm)
                                 st.success("Catálogo actualizado y guardado.")
                                 st.toast("Alimentos cargados correctamente.", icon="🧾")
                                 audit_log_append(
@@ -3455,7 +3477,7 @@ with tab_alimentos:
             if len(edited) > 30:
                 st.error("El catálogo admite máximo 30 alimentos. Recortá filas antes de guardar.")
             else:
-                base = load_alimentos().copy()
+                base = get_alimentos_state()
                 base = base.merge(
                     edited[["ORIGEN", "MS", "COEF ATC", "$/KG"]],
                     on="ORIGEN",
@@ -3468,12 +3490,13 @@ with tab_alimentos:
                         base[col] = base[new_col].where(base[new_col].notna(), base[col])
                         base.drop(columns=[new_col], inplace=True)
                 base = base.head(30)
-                save_alimentos(base)
+                save_alimentos_state(base)
                 st.success("Catálogo actualizado (MS, COEF ATC y $/KG).")
                 st.toast("Alimentos guardados y respaldados.", icon="🧾")
                 rerun_with_cache_reset()
 
         if c2.button("🔄 Recargar"):
+            reload_alimentos_state()
             rerun_with_cache_reset()
 
 # ------------------------------------------------------------------------------
@@ -4539,7 +4562,7 @@ with tab_parametros:
         st.dataframe(config_summary, hide_index=True, use_container_width=True)
 
         st.markdown("### Catálogo de alimentos")
-        alim_df = load_alimentos().copy()
+        alim_df = get_alimentos_state()
         for col in show_cols:
             if col not in alim_df.columns:
                 alim_df[col] = None
@@ -4558,7 +4581,7 @@ with tab_parametros:
             if len(edited) > 30:
                 st.error("El catálogo admite máximo 30 alimentos. Recortá filas antes de guardar.")
             else:
-                base = load_alimentos().copy()
+                base = get_alimentos_state()
                 base = base.merge(
                     edited[["ORIGEN", "MS", "COEF ATC", "$/KG"]],
                     on="ORIGEN",
@@ -4571,7 +4594,7 @@ with tab_parametros:
                         base[col] = base[new_col].where(base[new_col].notna(), base[col])
                         base.drop(columns=[new_col], inplace=True)
                 base = base.head(30)
-                save_alimentos(base)
+                save_alimentos_state(base)
                 st.success("Alimentos guardados.")
                 st.toast("Alimentos actualizados.", icon="🧾")
                 rerun_with_cache_reset()
@@ -5009,7 +5032,7 @@ with tab_raciones:
     with card("🧾 Ajustes de raciones", "Editá ingredientes y porcentajes (máx. 6, suma 100% MS)"):
         cat = load_catalog()
         rec = load_recipes()
-        alimentos_df = load_alimentos()
+        alimentos_df = get_alimentos_state()
         alimentos_norm = _normalize_columns(alimentos_df.copy())
         opciones_ingred = [""] + sorted(alimentos_norm["ORIGEN"].dropna().astype(str).unique().tolist())
 
