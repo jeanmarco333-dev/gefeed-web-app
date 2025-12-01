@@ -3810,6 +3810,13 @@ def step_raciones() -> None:
             value=float(existing.get("consumo_objetivo", 0.0)),
             step=0.1,
         )
+        kilos_totales = st.number_input(
+            "Kilos totales del día (as-fed)",
+            min_value=0.0,
+            value=float(existing.get("kilos_totales", 0.0)),
+            step=10.0,
+            help="Carga total diaria ya calculada en la etapa de raciones.",
+        )
         notas = st.text_area(
             "Observaciones de la ración",
             value=existing.get("notas", ""),
@@ -3832,6 +3839,7 @@ def step_raciones() -> None:
             "racion_base": racion_base.strip(),
             "porcentaje_ms": porcentaje_ms,
             "consumo_objetivo": consumo_objetivo,
+            "kilos_totales": kilos_totales,
             "notas": notas.strip(),
         }
         st.session_state["raciones"] = payload
@@ -3846,64 +3854,74 @@ def step_mixer() -> None:
 
     st.subheader("Paso 3 de 5 — Mixer y carga total")
 
+    datos_basicos = st.session_state.get("datos_basicos") or load_step_data(draft_id, "datos_basicos")
+    racion_data = st.session_state.get("raciones") or load_step_data(draft_id, "raciones")
+    corrales_payload = st.session_state.get("corrales") or load_step_data(draft_id, "corrales")
+
+    if not racion_data or not corrales_payload:
+        st.warning("Completá primero la ración y la asignación de corrales.")
+        return
+
+    corrales_data = corrales_payload.get("corrales") if isinstance(corrales_payload, dict) else []
+
     mixers_df = load_mixers()
-    mixer_options = [""]
-    if not mixers_df.empty:
-        mixer_options.extend(sorted(mixers_df["mixer_id"].dropna().astype(str)))
-    selected_mixer = str(existing.get("mixer_sel", ""))
-    selected_index = mixer_options.index(selected_mixer) if selected_mixer in mixer_options else 0
+    mixer_options = [m for m in mixers_df.get("mixer_id", []).dropna().astype(str).tolist()] if not mixers_df.empty else []
+    mixer_id = str(existing.get("mixer_id") or (mixer_options[0] if mixer_options else ""))
+    capacidad_kg = float(existing.get("capacidad_kg") or mixers_df.loc[mixers_df.get("mixer_id") == mixer_id, "capacidad_kg"].fillna(0).max() or 0)
 
-    with st.form("form_mixer"):
-        mixer_sel = st.selectbox(
-            "Mixer",
-            options=mixer_options,
-            index=selected_index,
-        )
-        capacidad = st.number_input(
-            "Capacidad del mixer (kg)",
-            min_value=0.0,
-            value=float(existing.get("capacidad", 0.0)),
-            step=10.0,
-        )
-        kilos_cargar = st.number_input(
-            "Kilos totales a cargar",
-            min_value=0.0,
-            value=float(existing.get("kilos_cargar", 0.0)),
-            step=10.0,
-        )
-        vueltas = st.number_input(
-            "Número de vueltas",
-            min_value=1,
-            value=int(existing.get("vueltas", 1) or 1),
-            step=1,
-        )
-        notas = st.text_area(
-            "Observaciones del mixer",
-            value=existing.get("notas", ""),
-        )
+    st.subheader("Resumen automático de ración y corrales")
+    st.json(
+        {
+            "racion_base": racion_data.get("racion_base"),
+            "consumo_objetivo": racion_data.get("consumo_objetivo"),
+            "kilos_totales_dia": racion_data.get("kilos_totales"),
+            "corrales_a_abastecer": len(corrales_data),
+        }
+    )
 
-        col1, col2 = st.columns([1, 1])
-        btn_guardar = col1.form_submit_button("💾 Guardar y continuar", type="primary")
-        btn_volver = col2.form_submit_button("⬅️ Volver")
+    st.subheader("Mixer seleccionado")
+    if not mixer_id:
+        st.error("Definí un mixer en ⚙️ Parámetros antes de continuar.")
+        return
+    st.json({"mixer": mixer_id, "capacidad_kg": capacidad_kg})
 
-    if btn_volver:
+    vueltas = st.number_input(
+        "¿En cuántas vueltas/entregas se divide la carga diaria?",
+        min_value=1,
+        max_value=10,
+        value=int(existing.get("vueltas", 1) or 1),
+        step=1,
+    )
+    kg_por_vuelta = float(racion_data.get("kilos_totales", 0.0) or 0.0) / max(vueltas, 1)
+    st.metric("Kg por vuelta", f"{kg_por_vuelta:.2f}")
+
+    st.subheader("Corrales incluidos en la carga")
+    if corrales_data:
+        st.dataframe(pd.DataFrame(corrales_data), use_container_width=True)
+    else:
+        st.info("No hay corrales cargados para esta ración.")
+
+    col1, col2 = st.columns([1, 1])
+    if col2.button("⬅️ Volver"):
         go_prev()
         st.rerun()
 
-    if btn_guardar:
-        if not mixer_sel:
-            st.error("Elegí un mixer para continuar.")
-            return
-        if capacidad <= 0:
-            st.error("Ingresá la capacidad del mixer en kilogramos.")
-            return
+    if col1.button("💾 Guardar carga completa", type="primary"):
+        carga_final = {
+            "datos_basicos": datos_basicos,
+            "racion": racion_data,
+            "mixer": {"mixer_id": mixer_id, "capacidad": capacidad_kg},
+            "vueltas": vueltas,
+            "kilos_por_vuelta": kg_por_vuelta,
+            "corrales": corrales_data,
+        }
 
         payload = {
-            "mixer_sel": mixer_sel,
-            "capacidad": capacidad,
-            "kilos_cargar": kilos_cargar,
+            "mixer_id": mixer_id,
+            "capacidad_kg": capacidad_kg,
             "vueltas": vueltas,
-            "notas": notas.strip(),
+            "kilos_por_vuelta": kg_por_vuelta,
+            "carga_final": carga_final,
         }
         st.session_state["mixer"] = payload
         save_step_data(draft_id, "mixer", payload)
@@ -3917,23 +3935,29 @@ def step_corrales() -> None:
 
     st.subheader("Paso 4 de 5 — Distribución por corrales")
 
+    default_rows = existing.get("corrales") or [
+        {"nro": 1, "cab": 0, "kg_dia": 0.0},
+    ]
+
     with st.form("form_corrales"):
-        descripcion = st.text_area(
-            "Detalle de distribución",
-            value=existing.get("descripcion", ""),
-            help="Anotá cómo se reparte la carga entre corrales o categorías.",
+        st.caption(
+            "Indicá los corrales ya asignados a la ración. Cada fila debe incluir el número, "
+            "cantidad de cabezas y los kilos diarios calculados para ese corral."
         )
-        total_corrales = st.number_input(
-            "Cantidad de corrales a abastecer",
-            min_value=0,
-            value=int(existing.get("total_corrales", 0)),
-            step=1,
+        corrales_rows = st.data_editor(
+            default_rows,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "nro": st.column_config.NumberColumn("Corral", min_value=1, step=1),
+                "cab": st.column_config.NumberColumn("Cab.", min_value=0, step=1),
+                "kg_dia": st.column_config.NumberColumn("Kg/día", min_value=0.0, format="%.2f"),
+            },
         )
-        kilos_totales = st.number_input(
-            "Kilos totales distribuidos",
-            min_value=0.0,
-            value=float(existing.get("kilos_totales", 0.0)),
-            step=10.0,
+        observaciones = st.text_area(
+            "Observaciones de distribución",
+            value=existing.get("observaciones", ""),
+            help="Notas o comentarios sobre la asignación de corrales.",
         )
 
         col1, col2 = st.columns([1, 1])
@@ -3945,14 +3969,31 @@ def step_corrales() -> None:
         st.rerun()
 
     if btn_guardar:
-        if total_corrales <= 0:
-            st.error("Indicá al menos un corral para la distribución.")
+        corrales_df = pd.DataFrame(corrales_rows or [])
+        corrales_df = corrales_df.dropna(how="all")
+        if corrales_df.empty:
+            st.error("Agregá al menos un corral con datos válidos.")
             return
 
+        corrales_df["nro"] = pd.to_numeric(corrales_df.get("nro", 0), errors="coerce").fillna(0).astype(int)
+        corrales_df["cab"] = pd.to_numeric(corrales_df.get("cab", 0), errors="coerce").fillna(0).astype(int)
+        corrales_df["kg_dia"] = pd.to_numeric(corrales_df.get("kg_dia", 0.0), errors="coerce").fillna(0.0)
+
+        valid_rows = corrales_df[corrales_df["nro"] > 0]
+        if valid_rows.empty:
+            st.error("Indicá números de corral válidos.")
+            return
+
+        total_corrales = int(valid_rows.shape[0])
+        kilos_totales = float(valid_rows["kg_dia"].sum())
+        total_cab = int(valid_rows["cab"].sum())
+
         payload = {
-            "descripcion": descripcion.strip(),
+            "corrales": valid_rows.to_dict(orient="records"),
             "total_corrales": total_corrales,
             "kilos_totales": kilos_totales,
+            "total_cab": total_cab,
+            "observaciones": observaciones.strip(),
         }
         st.session_state["corrales"] = payload
         save_step_data(draft_id, "corrales", payload)
@@ -3970,14 +4011,21 @@ def step_resumen() -> None:
 
     st.subheader("Paso 5 de 5 — Resumen y confirmación")
 
-    st.write("### Datos básicos")
-    st.json(datos_basicos)
-    st.write("### Raciones")
-    st.json(raciones)
-    st.write("### Mixer")
-    st.json(mixer_info)
-    st.write("### Corrales")
-    st.json(corrales)
+    if not (datos_basicos and raciones and mixer_info and corrales):
+        st.warning("Faltan datos para armar el resumen. Volvé atrás y completá los pasos previos.")
+        return
+
+    carga_final = mixer_info.get("carga_final") if isinstance(mixer_info, dict) else None
+    if not carga_final:
+        carga_final = {
+            "datos_basicos": datos_basicos,
+            "racion": raciones,
+            "mixer": mixer_info,
+            "corrales": corrales.get("corrales") if isinstance(corrales, dict) else corrales,
+        }
+
+    st.write("### Carga consolidada")
+    st.json(carga_final)
 
     col1, col2, col3 = st.columns([1, 1, 1])
 
@@ -3992,6 +4040,7 @@ def step_resumen() -> None:
             "raciones": raciones,
             "mixer": mixer_info,
             "corrales": corrales,
+            "carga_final": carga_final,
             "confirmado_en": datetime.now().isoformat(),
         }
         guardar_registro_definitivo(registro_final)
