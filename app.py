@@ -2713,6 +2713,200 @@ def enrich_and_calc_base(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
+def _mixer_cargas_dir() -> Path:
+    """Return the directory where finalized mixer loads are stored."""
+
+    target = GLOBAL_DATA_DIR / "mixer_cargas"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def guardar_cargas_mixer(carga_final: dict[str, Any]) -> tuple[Path, Path | None]:
+    """Persist the aggregated mixer loads for the day as JSON and CSV.
+
+    Returns the paths to the JSON file and the CSV file (if generated).
+    """
+
+    fecha = str(carga_final.get("fecha") or date.today())
+    out_dir = _mixer_cargas_dir()
+
+    json_path = out_dir / f"cargas_mixer_{fecha}.json"
+    tmp_json = json_path.with_suffix(".tmp")
+    with open(tmp_json, "w", encoding="utf-8") as handle:
+        json.dump(carga_final, handle, ensure_ascii=False, indent=2)
+    tmp_json.replace(json_path)
+
+    flat_rows: list[dict[str, Any]] = []
+    for carga in carga_final.get("cargas", []):
+        detalle = carga.get("detalle_corrales") or []
+        for corral in detalle:
+            flat_rows.append(
+                {
+                    "fecha": fecha,
+                    "racion": carga.get("racion", ""),
+                    "mixer": carga.get("mixer", ""),
+                    "capacidad": carga.get("capacidad", 0),
+                    "entregas": carga.get("entregas", 0),
+                    "kg_totales_dia": carga.get("kg_totales_dia", 0.0),
+                    "kg_por_entrega_total": carga.get("kg_por_entrega_total", 0.0),
+                    "nro_corral": corral.get("nro_corral"),
+                    "nro_cab": corral.get("nro_cab"),
+                    "kg_dia_corral": corral.get("kg_dia_corral"),
+                    "kg_por_entrega_corral": corral.get("kg_por_entrega_corral"),
+                }
+            )
+
+    csv_path: Path | None = None
+    if flat_rows:
+        csv_path = out_dir / f"cargas_mixer_{fecha}.csv"
+        pd.DataFrame(flat_rows).to_csv(csv_path, index=False, encoding="utf-8")
+
+    success = backup_user_file(json_path, "Guardar cargas de mixer")
+    audit_log_append(
+        "guardar_cargas_mixer",
+        "Cargas de mixer guardadas",
+        path=str(json_path),
+        meta={"csv": str(csv_path) if csv_path else None, "github_backup": success},
+    )
+    mark_changed("guardar_cargas_mixer", username)
+    activity_log_event(
+        "edicion",
+        f"mixer_cargas grupos={len(carga_final.get('cargas', []))}",
+        trace_prefix="MIXG-",
+    )
+
+    return json_path, csv_path
+
+
+def render_mixer_carga_simple() -> None:
+    """Renderiza la carga automática por grupo Ración–Mixer con un solo guardado."""
+
+    base_df = get_corrales_base()
+    mixers_df = load_mixers()
+
+    if base_df.empty:
+        st.info("No hay corrales configurados en la base.")
+        return
+
+    if mixers_df.empty or mixers_df["mixer_id"].dropna().empty:
+        st.warning("Definí mixers en ⚙️ Parámetros para calcular la carga automática.")
+        return
+
+    base_calc = enrich_and_calc_base(base_df)
+    if base_calc.empty:
+        st.info("No hay datos suficientes para calcular cargas de mixer.")
+        return
+
+    cap_map = dict(
+        zip(
+            mixers_df["mixer_id"].astype(str),
+            pd.to_numeric(mixers_df["capacidad_kg"], errors="coerce").fillna(0).astype(float),
+        )
+    )
+
+    st.markdown("### Cargas detectadas automáticamente (1 por combinación Ración–Mixer)")
+
+    combos = base_calc.groupby(["nombre_racion", "mixer_id"])
+    todas_las_cargas: list[dict[str, Any]] = []
+
+    for (racion, mixer_sel), df_group in combos:
+        racion_str = str(racion).strip()
+        mixer_str = str(mixer_sel).strip()
+        if not racion_str:
+            continue
+
+        st.subheader(f"Ración **{racion_str}** — Mixer **{mixer_str or 'Sin mixer'}**")
+
+        df_group = df_group.copy()
+        df_group["turnos"] = (
+            pd.to_numeric(df_group.get("turnos"), errors="coerce").fillna(1).clip(lower=1)
+        )
+        df_group["kg_turno_asfed_calc"] = pd.to_numeric(
+            df_group.get("kg_turno_asfed_calc"), errors="coerce"
+        ).fillna(0.0)
+        df_group["nro_cab"] = normalize_animal_counts(df_group.get("nro_cab"), index=df_group.index)
+
+        df_group["kg_dia_corral"] = df_group["kg_turno_asfed_calc"] * df_group["turnos"]
+        kg_totales_dia = float(df_group["kg_dia_corral"].sum())
+
+        capacidad = float(cap_map.get(mixer_str, 0.0))
+
+        key_suffix = "".join(ch if ch.isalnum() else "_" for ch in f"{racion_str}_{mixer_str or 'sin_mixer'}")
+        key_entregas = f"entregas_auto_{key_suffix}"
+        entregas_default = int(st.session_state.get(key_entregas, 2))
+        entregas = st.number_input(
+            "¿En cuántas entregas dividimos la ración diaria?",
+            min_value=1,
+            max_value=10,
+            value=entregas_default if entregas_default >= 1 else 2,
+            step=1,
+            key=key_entregas,
+        )
+
+        kg_por_entrega_total = kg_totales_dia / float(max(entregas, 1))
+        df_group["kg_por_entrega_corral"] = df_group["kg_dia_corral"] / float(max(entregas, 1))
+
+        detalle_corrales = df_group[
+            ["nro_corral", "nro_cab", "kg_dia_corral", "kg_por_entrega_corral", "turnos", "kg_turno_asfed_calc"]
+        ]
+
+        resumen = {
+            "racion": racion_str,
+            "mixer": mixer_str,
+            "capacidad": capacidad,
+            "animales": int(pd.to_numeric(df_group.get("nro_cab"), errors="coerce").fillna(0).sum()),
+            "corrales": int(df_group["nro_corral"].nunique()),
+            "kg_totales_dia": kg_totales_dia,
+            "entregas": int(entregas),
+            "kg_por_entrega_total": kg_por_entrega_total,
+            "detalle_corrales": detalle_corrales.round(1).to_dict(orient="records"),
+        }
+
+        todas_las_cargas.append(resumen)
+
+        col_resumen, col_tabla = st.columns((1, 1.2))
+        with col_resumen:
+            st.markdown("**Resumen**")
+            st.json({k: v for k, v in resumen.items() if k != "detalle_corrales"})
+
+        with col_tabla:
+            st.caption("Detalle por corral (kg diarios y por entrega)")
+            st.dataframe(
+                detalle_corrales.rename(
+                    columns={
+                        "nro_corral": "Corral",
+                        "nro_cab": "Cabezas",
+                        "kg_dia_corral": "kg día corral",
+                        "kg_por_entrega_corral": "kg por entrega",
+                        "turnos": "Turnos",
+                        "kg_turno_asfed_calc": "kg por turno (as-fed)",
+                    }
+                ).round(1),
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        st.markdown("---")
+
+    if not todas_las_cargas:
+        st.info("No se encontraron combinaciones Ración–Mixer con datos para mostrar.")
+        return
+
+    st.markdown("## ✅ Guardar cargas del día")
+
+    if st.button("💾 GUARDAR TODAS LAS CARGAS DEL DÍA", type="primary", use_container_width=True):
+        carga_final_dia = {"fecha": str(date.today()), "cargas": todas_las_cargas}
+        json_path, csv_path = guardar_cargas_mixer(carga_final_dia)
+
+        st.success("✨ Todas las cargas del día fueron guardadas correctamente.")
+        st.balloons()
+        st.caption(f"JSON: {json_path.name}")
+        if csv_path:
+            st.caption(f"CSV: {csv_path.name}")
+
+        st.json(carga_final_dia)
+
 # ------------------------------------------------------------------------------
 # Tabs
 # ------------------------------------------------------------------------------
@@ -3827,6 +4021,12 @@ def run_mixer_wizard() -> None:
 # 🧮 Mixer
 # ------------------------------------------------------------------------------
 with tab_mixer:
+    with card(
+        "🧮 Carga de Mixer — Automática",
+        "Detecta grupos Ración–Mixer, permite definir entregas y guarda todo junto",
+    ):
+        render_mixer_carga_simple()
+
     with card("JM P-Feedlot v0.26 — Carga de ración (Wizard)", "Carga guiada paso a paso"):
         st.caption("🚧 Versión beta: guardá la carga paso a paso. Podés cerrar y volver, se recuperan los borradores.")
         run_mixer_wizard()
