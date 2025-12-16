@@ -51,26 +51,13 @@ def calculate_gmd(
     """
 
     if ap_kg_dia is not None:
-        try:
-            val = float(ap_kg_dia)
-        except (TypeError, ValueError):
-            val = None
-        else:
-            if not np.isnan(val):
-                return val
+        val = _coerce_float(ap_kg_dia)
+        if val is not None:
+            return val
 
-    try:
-        peso_ini = float(peso_inicial) if peso_inicial is not None else None
-    except (TypeError, ValueError):
-        peso_ini = None
-    try:
-        peso_fin = float(peso_final) if peso_final is not None else None
-    except (TypeError, ValueError):
-        peso_fin = None
-    try:
-        dias_val = float(dias) if dias is not None else None
-    except (TypeError, ValueError):
-        dias_val = None
+    peso_ini = _coerce_float(peso_inicial)
+    peso_fin = _coerce_float(peso_final)
+    dias_val = _coerce_float(dias)
 
     if (
         peso_ini is not None
@@ -90,6 +77,20 @@ def _safe_num(x, default: float = 0.0) -> float:
         return default if np.isnan(v) else v
     except Exception:
         return default
+
+
+def _coerce_float(value: float | str | None) -> float | None:
+    try:
+        if isinstance(value, str):
+            value = value.replace(",", ".").strip()
+        coerced = float(pd.to_numeric(value, errors="coerce"))
+    except (TypeError, ValueError):
+        return None
+
+    if np.isnan(coerced):
+        return None
+
+    return coerced
 
 
 def optimize_ration(
