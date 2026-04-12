@@ -665,7 +665,7 @@ def synthetic_em_requirement(pv_kg: float, ap_kg_dia: float, categoria: str | No
 # ------------------------------------------------------------------------------
 # Configuración global (debe ir antes de cualquier llamada a Streamlit)
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="JM P-Feedlot v0.26 — Web", layout="wide")
+st.set_page_config(page_title="🐄 GE-FEEDLOT — Web", layout="wide")
 
 CFG_PATH = Path("config_users.yaml")  # opcional (dev local o repo privado)
 
@@ -957,7 +957,7 @@ with st.sidebar:
 
     if st.button("Salir", type="secondary", use_container_width=True):
         _logout_user()
-APP_VERSION = "JM P-Feedlot v0.26-beta (free)"
+APP_VERSION = "🐄 GE-FEEDLOT — Programa de Raciones y Gestión de Alimentación"
 
 dark_mode_active = bool(st.session_state.get("ui_theme_toggle", False))
 st.session_state["theme_dark"] = dark_mode_active
@@ -974,17 +974,20 @@ def _logo_block() -> None:
                 f"""
         <div style="display:flex;align-items:center;gap:.75rem;margin:.25rem 0 1rem 0;">
           <img src="data:image/png;base64,{b64}" height="36" />
-          <div style="font-weight:700; letter-spacing:.4px;">JM P-Feedlot v0.26 — Web</div>
+          <div style="font-weight:700; letter-spacing:.4px;">🐄 GE-FEEDLOT</div>
         </div>
         """,
                 unsafe_allow_html=True,
             )
             return
-    st.markdown("### JM P-Feedlot v0.26 — Web")
+    st.markdown("### 🐄 GE-FEEDLOT")
 
 
 _logo_block()
 
+st.markdown("**Programa de Raciones y Gestión de Alimentación**")
+st.markdown("_No es solo nutrición → es gestión integral del costo alimenticio y performance animal._")
+st.markdown("Autor: [EcoGestionar](https://ecogestionar.wixsite.com/ecogestion)")
 st.info("🚧 Versión beta sin costo: validando con clientes iniciales. Guardá y exportá seguido por seguridad.")
 
 # Helpers de UI
