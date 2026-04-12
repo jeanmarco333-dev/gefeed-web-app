@@ -101,10 +101,17 @@ SESSION_AUTH_STATUS = "auth_status"
 SESSION_AUTH_USER = "auth_username"
 SESSION_AUTH_NAME = "auth_name"
 SESSION_AUTH_TOKEN = "auth_token_seed"
+SESSION_AUTH_FLASH = "auth_flash_message"
 
 
 def _clear_auth_state() -> None:
-    for key in (SESSION_AUTH_STATUS, SESSION_AUTH_USER, SESSION_AUTH_NAME, SESSION_AUTH_TOKEN):
+    for key in (
+        SESSION_AUTH_STATUS,
+        SESSION_AUTH_USER,
+        SESSION_AUTH_NAME,
+        SESSION_AUTH_TOKEN,
+        SESSION_AUTH_FLASH,
+    ):
         st.session_state.pop(key, None)
 
 
@@ -132,6 +139,138 @@ def _verify_password(plain_password: str, stored_hash: str | None) -> bool:
         return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_bytes)
     except (TypeError, ValueError):
         return False
+
+
+def render_login_screen(credentials_cfg: dict[str, dict[str, Any]], cookie_token_seed: str) -> None:
+    """Render a branded and centered login view and handle authentication."""
+
+    auth_status = st.session_state.get(SESSION_AUTH_STATUS)
+
+    st.markdown(
+        dedent(
+            """
+            <style>
+            .stApp {
+                background: #F5F7F9;
+            }
+            .block-container {
+                padding-top: 4.5rem !important;
+                padding-bottom: 3.5rem !important;
+            }
+            .login-shell {
+                background: #FFFFFF;
+                border: 1px solid #E5E7EB;
+                border-radius: 18px;
+                padding: 1.9rem 1.7rem 1.5rem;
+                box-shadow: 0 16px 40px -30px rgba(15, 23, 42, 0.35);
+            }
+            .login-brand {
+                font-size: 2rem;
+                font-weight: 700;
+                color: #1B5E20;
+                margin-bottom: 0.2rem;
+                letter-spacing: 0.01em;
+            }
+            .login-tagline {
+                color: #333333;
+                font-size: 0.97rem;
+                margin-bottom: 1.1rem;
+            }
+            .login-title {
+                color: #1F2937;
+                font-weight: 600;
+                font-size: 1.2rem;
+                margin-bottom: 0.12rem;
+            }
+            .login-support {
+                color: #6B7280;
+                font-size: 0.92rem;
+                margin-bottom: 0.95rem;
+            }
+            .login-footnote {
+                color: #6B7280;
+                font-size: 0.82rem;
+                margin-top: 0.8rem;
+            }
+            .login-subtle-line {
+                color: #4B5563;
+                font-size: 0.78rem;
+                margin-top: 0.45rem;
+                letter-spacing: 0.01em;
+            }
+            div[data-testid="stForm"] {
+                border: none;
+                padding: 0;
+                background: transparent;
+            }
+            .stTextInput > div > div > input {
+                border-radius: 10px;
+                padding: 0.6rem 0.72rem;
+            }
+            .stButton > button[kind="primary"],
+            .stForm button[kind="primary"] {
+                background: #2E7D32;
+                border: 1px solid #2E7D32;
+                color: #FFFFFF;
+                font-weight: 600;
+            }
+            .stButton > button[kind="primary"]:hover,
+            .stForm button[kind="primary"]:hover {
+                background: #1B5E20;
+                border-color: #1B5E20;
+            }
+            </style>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
+    outer_left, center_col, outer_right = st.columns([1.5, 1.2, 1.5])
+    with center_col:
+        st.markdown("<div class='login-shell'>", unsafe_allow_html=True)
+        st.markdown("<div class='login-brand'>GE-Feedlot</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='login-tagline'>Gestión inteligente de alimentación, consumo y resultados</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='login-title'>Iniciar sesión</div>", unsafe_allow_html=True)
+        st.markdown("<div class='login-support'>Accedé a tu entorno de gestión</div>", unsafe_allow_html=True)
+
+        if auth_status is False:
+            st.error("Usuario o contraseña incorrectos")
+        elif auth_status is None:
+            st.info("Ingresá tus datos para continuar")
+
+        with st.form("login_form"):
+            input_username = st.text_input("Usuario o correo", placeholder="Ej.: admin")
+            input_password = st.text_input("Contraseña", type="password")
+            submit_login = st.form_submit_button("Iniciar sesión", type="primary", width="stretch")
+
+        if submit_login:
+            user_entry = credentials_cfg.get(input_username)
+            stored_hash = (user_entry or {}).get("password")
+            if _verify_password(input_password, stored_hash):
+                resolved_name = (user_entry or {}).get("name") or input_username
+                st.session_state[SESSION_AUTH_STATUS] = True
+                st.session_state[SESSION_AUTH_USER] = input_username
+                st.session_state[SESSION_AUTH_NAME] = resolved_name
+                st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
+                st.session_state[SESSION_AUTH_FLASH] = "Acceso correcto"
+                _trigger_rerun()
+            else:
+                st.session_state[SESSION_AUTH_STATUS] = False
+                _trigger_rerun()
+
+        st.markdown(
+            "<div class='login-footnote'>Accedé con el usuario asignado por tu organización</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div class='login-subtle-line'>Control de consumo · Gestión de raciones · Seguimiento productivo</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
 
 BASE_STYLE = dedent(
     """
@@ -803,37 +942,16 @@ name = st.session_state.get(SESSION_AUTH_NAME)
 if auth_status is True and username:
     st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
 else:
-    if auth_status is False:
-        st.error("Usuario o contraseña inválidos")
-
-    with st.form("login_form"):
-        input_username = st.text_input("Usuario", placeholder="ej: admin")
-        input_password = st.text_input("Contraseña", type="password")
-        submit_login = st.form_submit_button("Ingresar", type="primary")
-
-    if submit_login:
-        user_entry = credentials_cfg.get(input_username)
-        stored_hash = (user_entry or {}).get("password")
-        if _verify_password(input_password, stored_hash):
-            resolved_name = (user_entry or {}).get("name") or input_username
-            st.session_state[SESSION_AUTH_STATUS] = True
-            st.session_state[SESSION_AUTH_USER] = input_username
-            st.session_state[SESSION_AUTH_NAME] = resolved_name
-            st.session_state[SESSION_AUTH_TOKEN] = cookie_token_seed
-            _trigger_rerun()
-        else:
-            st.session_state[SESSION_AUTH_STATUS] = False
-            st.error("Usuario o contraseña inválidos")
-            st.stop()
-    else:
-        if auth_status is not False:
-            st.info("Ingresá tus credenciales")
-        st.stop()
+    render_login_screen(credentials_cfg, cookie_token_seed)
 
 # Si llegamos aquí, hay una sesión válida
 auth_status = True
 username = st.session_state.get(SESSION_AUTH_USER)
 name = st.session_state.get(SESSION_AUTH_NAME) or username
+
+flash_message = st.session_state.pop(SESSION_AUTH_FLASH, None)
+if flash_message:
+    st.success(flash_message)
 
 if not username:
     st.error("Sesión inválida. Iniciá sesión nuevamente.")
